@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <array>
+#include <cstdio>
 #include <iostream>
 #include <cstring>
 
@@ -83,28 +85,78 @@ void Renderer::initHud() {
     glGenBuffers(1, &hud_vbo_);
     glBindVertexArray(hud_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, 4 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 256 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
     glBindVertexArray(0);
 }
 
-void Renderer::drawCrosshair() {
-    float cx = 20.0f / (float)(width_  / 2);
-    float cy = 20.0f / (float)(height_ / 2);
+void Renderer::appendLine(float* verts, int& count, float x0, float y0, float x1, float y1) const {
+    verts[count++] = x0;
+    verts[count++] = y0;
+    verts[count++] = x1;
+    verts[count++] = y1;
+}
 
-    float verts[8] = {
-        -cx,  0.f,   cx, 0.f,
-          0.f, -cy,  0.f, cy
+void Renderer::appendDigit(float* verts, int& count, int digit, float left, float top, float w, float h) const {
+    static const uint8_t SEGMENTS[10] = {
+        0b1111110, 0b0110000, 0b1101101, 0b1111001, 0b0110011,
+        0b1011011, 0b1011111, 0b1110000, 0b1111111, 0b1111011
     };
 
+    if (digit < 0 || digit > 9) return;
+
+    const float right = left + w;
+    const float mid   = top - h * 0.5f;
+    const float bot   = top - h;
+    const uint8_t mask = SEGMENTS[digit];
+
+    if (mask & 0b1000000) appendLine(verts, count, left, top, right, top);
+    if (mask & 0b0100000) appendLine(verts, count, right, top, right, mid);
+    if (mask & 0b0010000) appendLine(verts, count, right, mid, right, bot);
+    if (mask & 0b0001000) appendLine(verts, count, left, bot, right, bot);
+    if (mask & 0b0000100) appendLine(verts, count, left, mid, left, bot);
+    if (mask & 0b0000010) appendLine(verts, count, left, top, left, mid);
+    if (mask & 0b0000001) appendLine(verts, count, left, mid, right, mid);
+}
+
+void Renderer::appendNumber(float* verts, int& count, int value, float right, float top, float w, float h, float gap) const {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", value);
+    int len = 0;
+    while (buf[len] != '\0') ++len;
+
+    float total = len * w + (len > 0 ? (len - 1) * gap : 0.0f);
+    float x = right - total;
+    for (int i = 0; i < len; ++i) {
+        appendDigit(verts, count, buf[i] - '0', x, top, w, h);
+        x += w + gap;
+    }
+}
+
+void Renderer::drawHud(int fps) {
+    std::array<float, 256> verts{};
+    int count = 0;
+
+    float cx = 20.0f / (float)(width_  / 2);
+    float cy = 20.0f / (float)(height_ / 2);
+    appendLine(verts.data(), count, -cx, 0.f, cx, 0.f);
+    appendLine(verts.data(), count, 0.f, -cy, 0.f, cy);
+
+    float px = 14.0f / (float)(width_ / 2);
+    float py = 18.0f / (float)(height_ / 2);
+    float digit_w = 14.0f / (float)(width_ / 2);
+    float digit_h = 24.0f / (float)(height_ / 2);
+    float gap = 6.0f / (float)(width_ / 2);
+    appendNumber(verts.data(), count, fps, 1.0f - px, 1.0f - py, digit_w, digit_h, gap);
+
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
-    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
 
     glDisable(GL_DEPTH_TEST);
     hud_shader_.use();
     glBindVertexArray(hud_vao_);
-    glDrawArrays(GL_LINES, 0, 4);
+    glDrawArrays(GL_LINES, 0, count / 2);
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 }
