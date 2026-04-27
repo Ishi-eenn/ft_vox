@@ -168,6 +168,9 @@ bool Engine::init(uint32_t seed, int width, int height) {
 void Engine::run() {
     using Clock = std::chrono::steady_clock;
     auto prev   = Clock::now();
+    float fps_timer = 0.0f;
+    int fps_frames = 0;
+    int fps_display = 0;
 
     while (running_) {
         // ── Delta time ────────────────────────────────────────────────────────
@@ -175,6 +178,13 @@ void Engine::run() {
         float dt  = std::chrono::duration<float>(now - prev).count();
         prev      = now;
         if (dt > 0.1f) dt = 0.1f;  // cap to prevent spiral-of-death
+        fps_timer += dt;
+        ++fps_frames;
+        if (fps_timer >= 0.25f) {
+            fps_display = (int)std::round((float)fps_frames / fps_timer);
+            fps_timer = 0.0f;
+            fps_frames = 0;
+        }
 
         // ── Input + movement (Player calls glfwPollEvents internally) ─────────
         impl_->player.update(dt);
@@ -254,7 +264,7 @@ void Engine::run() {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);
         }
 
-        impl_->renderer.drawCrosshair();
+        impl_->renderer.drawHud(fps_display);
         impl_->renderer.endFrame();
         ++frame_;
     }

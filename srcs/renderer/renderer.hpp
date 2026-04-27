@@ -19,7 +19,7 @@ public:
     void beginFrame() override;
     void drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) override;
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
-    void drawCrosshair();
+    void drawHud(int fps);
     void endFrame() override;
     void onResize(int w, int h) override;
 
@@ -27,6 +27,9 @@ public:
 
 private:
     void initHud();
+    void appendLine(float* verts, int& count, float x0, float y0, float x1, float y1) const;
+    void appendDigit(float* verts, int& count, int digit, float left, float top, float w, float h) const;
+    void appendNumber(float* verts, int& count, int value, float right, float top, float w, float h, float gap) const;
 
     GLFWwindow*  window_  = nullptr;
     Shader       chunk_shader_;
