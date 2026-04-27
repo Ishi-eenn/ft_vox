@@ -1,6 +1,7 @@
 #include "core/engine.hpp"
 
 // glad MUST be included before GLFW
+#define GLAD_GL_IMPLEMENTATION
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
