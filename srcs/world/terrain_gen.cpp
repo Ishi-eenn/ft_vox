@@ -20,6 +20,19 @@ static constexpr BiomeParams kDesert = {48.0f, 10.0f,  3.0f};
 static constexpr BiomeParams kTundra = {54.0f, 30.0f, 18.0f};
 static constexpr BiomeParams kRocky  = {72.0f, 55.0f, 32.0f};
 
+static uint32_t hash3(int x, int y, int z) {
+    uint32_t h = 2166136261u;
+    h = (h ^ (uint32_t)x) * 16777619u;
+    h = (h ^ (uint32_t)y) * 16777619u;
+    h = (h ^ (uint32_t)z) * 16777619u;
+    h ^= h >> 16;
+    h *= 0x7feb352du;
+    h ^= h >> 15;
+    h *= 0x846ca68bu;
+    h ^= h >> 16;
+    return h;
+}
+
 // Bilinear blend of a single float parameter across four biome corners.
 static float blendBiome(float wP, float wD, float wT, float wR,
                         float vP, float vD, float vT, float vR) {
@@ -35,6 +48,61 @@ static void biomeWeights(float temp, float humid,
     wD = t01 * (1.0f - h01);           // Desert  (hot+dry)
     wT = (1.0f - t01) * h01;           // Tundra  (cold+wet)
     wR = (1.0f - t01) * (1.0f - h01); // Rocky   (cold+dry)
+}
+
+static bool canPlaceTreeAt(const Chunk& chunk, int x, int z, int surface) {
+    if (x < 2 || x > CHUNK_SIZE_X - 3 || z < 2 || z > CHUNK_SIZE_Z - 3) return false;
+    if (surface < SEA_LEVEL + 2 || surface > CHUNK_SIZE_Y - 10) return false;
+    if (chunk.getBlock(x, surface, z) != BlockType::Grass) return false;
+
+    for (int dz = -1; dz <= 1; ++dz) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            BlockType base = chunk.getBlock(x + dx, surface, z + dz);
+            if (base != BlockType::Grass && base != BlockType::Dirt) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void placeTree(Chunk& chunk, int x, int z, int surface, uint32_t seed) {
+    uint32_t h = hash3(chunk.pos.x * CHUNK_SIZE_X + x, surface, chunk.pos.z * CHUNK_SIZE_Z + z);
+    h ^= seed * 0x9e3779b9u;
+
+    int trunk_height = 4 + (int)(h % 3u);
+    int trunk_top = surface + trunk_height;
+    if (trunk_top + 2 >= CHUNK_SIZE_Y) return;
+
+    for (int y = surface + 1; y <= trunk_top; ++y) {
+        chunk.setBlock(x, y, z, BlockType::Wood);
+    }
+
+    for (int dy = -2; dy <= 0; ++dy) {
+        int radius = (dy == 0) ? 1 : 2;
+        int cy = trunk_top + dy;
+        for (int dz = -radius; dz <= radius; ++dz) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (std::abs(dx) == radius && std::abs(dz) == radius && dy == 0) continue;
+                if (dx == 0 && dz == 0 && dy <= -1) continue;
+                if (chunk.getBlock(x + dx, cy, z + dz) == BlockType::Air) {
+                    chunk.setBlock(x + dx, cy, z + dz, BlockType::Leaves);
+                }
+            }
+        }
+    }
+
+    for (int dy = 1; dy <= 2; ++dy) {
+        int cy = trunk_top + dy;
+        int radius = (dy == 1) ? 1 : 0;
+        for (int dz = -radius; dz <= radius; ++dz) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (chunk.getBlock(x + dx, cy, z + dz) == BlockType::Air) {
+                    chunk.setBlock(x + dx, cy, z + dz, BlockType::Leaves);
+                }
+            }
+        }
+    }
 }
 
 void TerrainGenerator::generate(Chunk& chunk) const {
@@ -127,6 +195,26 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                 }
 
                 chunk.setBlock(x, y, z, t);
+            }
+        }
+    }
+
+    for (int x = 0; x < CHUNK_SIZE_X; ++x) {
+        for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+            int surface = heights[x + 1][z + 1];
+            float wx = (float)(world_x + x);
+            float wz = (float)(world_z + z);
+            float temp  = noise_.getTemperature(wx, wz);
+            float humid = noise_.getHumidity(wx, wz);
+            float wP, wD, wT, wR;
+            biomeWeights(temp, humid, wP, wD, wT, wR);
+
+            if ((wP + wT) < 0.35f || wD > 0.45f || wR > 0.40f) continue;
+            if (!canPlaceTreeAt(chunk, x, z, surface)) continue;
+
+            uint32_t chance = hash3(world_x + x, (int)seed_, world_z + z);
+            if ((chance % 100u) < 7u) {
+                placeTree(chunk, x, z, surface, seed_);
             }
         }
     }

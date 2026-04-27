@@ -204,6 +204,65 @@ static void fillWater(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
     }
 }
 
+static void fillWood(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 301);
+            int n2 = hash2(px, py, 337);
+
+            int r = 112 + (n1 - 128) * 16 / 128;
+            int g = 82  + (n1 - 128) * 12 / 128;
+            int b = 48  + (n1 - 128) * 10 / 128;
+
+            if ((px % 4 == 1 || px % 4 == 2) && n2 > 84) {
+                r += 18;
+                g += 12;
+                b += 6;
+            }
+            if (n2 < 18) {
+                r -= 22;
+                g -= 16;
+                b -= 10;
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+static void fillLeaves(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 401);
+            int n2 = hash2(px, py, 449);
+
+            int r = 42 + (n1 - 128) * 12 / 128;
+            int g = 118 + (n1 - 128) * 26 / 128;
+            int b = 34 + (n1 - 128) * 10 / 128;
+
+            if (n2 > 222) {
+                r += 18;
+                g += 24;
+                b += 10;
+            } else if (n2 < 20) {
+                r -= 14;
+                g -= 20;
+                b -= 10;
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
 // ─── Solid color (for Air / unused tiles) ────────────────────────────────────
 static void fillSolid(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
                        uint8_t r, uint8_t g, uint8_t b) {
@@ -235,6 +294,8 @@ bool TextureAtlas::generate() {
     fillSand (pixels, atlas_w, 4, 0);
     fillSnow (pixels, atlas_w, 5, 0);
     fillWater(pixels, atlas_w, 6, 0);
+    fillWood (pixels, atlas_w, 7, 0);
+    fillLeaves(pixels, atlas_w, 0, 1);
 
     glGenTextures(1, &tex_id_);
     glBindTexture(GL_TEXTURE_2D, tex_id_);
