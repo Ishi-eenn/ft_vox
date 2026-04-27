@@ -26,4 +26,6 @@ public:
 private:
     Camera       camera_;
     InputHandler input_;
+    bool         fast_mode_   = false;
+    bool         f_was_down_  = false;
 };

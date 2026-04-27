@@ -103,13 +103,7 @@ float MeshBuilder::getWaterSurfaceHeight(
     uint8_t level = getNeighborWaterLevel(x, y, z, chunk, neighbors);
     if (level == 0) return 1.0f;
     if (level >= 8) return 0.95f;
-    switch (level) {
-        case 1: return 0.78f;
-        case 2: return 0.56f;
-        case 3: return 0.34f;
-        case 4: return 0.18f;
-        default: return 0.18f;
-    }
+    return 0.12f + (float)(8 - level) * 0.11f;
 }
 
 void MeshBuilder::computeWaterTopHeights(
