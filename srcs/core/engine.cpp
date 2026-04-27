@@ -127,7 +127,12 @@ bool Engine::init(uint32_t seed, int width, int height) {
 #endif
     glfwWindowHint(GLFW_RESIZABLE, GL_TRUE);
 
-    window_ = glfwCreateWindow(width_, height_, "ft_vox", nullptr, nullptr);
+    GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
+    width_  = mode->width;
+    height_ = mode->height;
+
+    window_ = glfwCreateWindow(width_, height_, "ft_vox", monitor, nullptr);
     if (!window_) {
         fprintf(stderr, "[Engine] glfwCreateWindow failed\n");
         glfwTerminate();
