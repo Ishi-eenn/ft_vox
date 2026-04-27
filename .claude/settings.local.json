@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -B /Users/ishikawatsubasa/Works/ft_vox/build /Users/ishikawatsubasa/Works/ft_vox/)",
+      "Bash(cmake -B build -DCMAKE_BUILD_TYPE=Debug)",
+      "Bash(brew list *)",
+      "Bash(cmake -B build -DCMAKE_BUILD_TYPE=Release)",
+      "Bash(cmake -B /Users/ishikawatsubasa/Works/ft_vox/build -DCMAKE_BUILD_TYPE=Release -Wno-dev -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -S /Users/ishikawatsubasa/Works/ft_vox)"
+    ]
+  }
+}

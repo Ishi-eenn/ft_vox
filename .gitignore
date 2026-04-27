@@ -1,0 +1,7 @@
+build/
+objs/
+vendor/
+ft_vox
+*.o
+*.d
+.DS_Store
