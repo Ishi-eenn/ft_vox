@@ -5,3 +5,4 @@ ft_vox
 *.o
 *.d
 .DS_Store
+.claude
