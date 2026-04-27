@@ -7,4 +7,5 @@ public:
     virtual Chunk* getOrCreateChunk(ChunkPos pos) = 0;
     virtual void   setSeed(uint32_t seed)          = 0;
     virtual uint32_t getSeed() const               = 0;
+    virtual std::vector<WorldPos> stepWater(ChunkPos min_chunk, ChunkPos max_chunk) = 0;
 };

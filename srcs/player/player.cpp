@@ -15,12 +15,8 @@ void Player::update(float dt) {
     input_.newFrame();
     glfwPollEvents();
 
-    // ─── Fast mode toggle (Left Shift key) ────────────────────────────────
-    bool f_down = input_.isHeld(GLFW_KEY_LEFT_SHIFT);
-    if (f_down && !f_was_down_) fast_mode_ = !fast_mode_;
-    f_was_down_ = f_down;
-
-    float speed = fast_mode_ ? PLAYER_SPEED_FAST : PLAYER_SPEED_NORMAL;
+    float speed = input_.isHeld(GLFW_KEY_LEFT_SHIFT) ? PLAYER_SPEED_FAST
+                                                     : PLAYER_SPEED_NORMAL;
 
     // ─── Mouse look (only when cursor is captured) ────────────────────────
     if (input_.isCursorCaptured()) {

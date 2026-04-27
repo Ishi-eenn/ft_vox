@@ -1,5 +1,6 @@
 #include "world/world.hpp"
 #include <cmath>
+#include <unordered_set>
 
 World::World(uint32_t seed) {
     setSeed(seed);
@@ -10,9 +11,67 @@ void World::setSeed(uint32_t seed) {
     gen_.setSeed(seed);
 }
 
-// Helper: floor-divide for correct negative coordinate handling
-static int floorDiv(int a, int b) {
+int World::floorDiv(int a, int b) {
     return (int)std::floor((double)a / b);
+}
+
+ChunkPos World::worldToChunk(int wx, int wz) {
+    return {floorDiv(wx, CHUNK_SIZE_X), floorDiv(wz, CHUNK_SIZE_Z)};
+}
+
+bool World::isSolidBlock(BlockType type) const {
+    return type != BlockType::Air && type != BlockType::Water;
+}
+
+bool World::inChunkRange(ChunkPos pos, ChunkPos min_chunk, ChunkPos max_chunk) const {
+    return pos.x >= min_chunk.x && pos.x <= max_chunk.x
+        && pos.z >= min_chunk.z && pos.z <= max_chunk.z;
+}
+
+bool World::isWaterBlock(int wx, int wy, int wz) const {
+    return getWorldBlock(wx, wy, wz) == BlockType::Water;
+}
+
+bool World::isSourceWater(int wx, int wy, int wz) const {
+    if (getWorldBlock(wx, wy, wz) != BlockType::Water) return false;
+    return flowing_water_.find({wx, wy, wz}) == flowing_water_.end();
+}
+
+bool World::isFlowingWater(int wx, int wy, int wz, uint8_t* level_out) const {
+    auto it = flowing_water_.find({wx, wy, wz});
+    if (it == flowing_water_.end()) return false;
+    if (level_out) *level_out = it->second;
+    return true;
+}
+
+void World::activateWaterAt(int wx, int wy, int wz) {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
+    active_water_.insert({wx, wy, wz});
+}
+
+void World::activateWaterNeighborhood(int wx, int wy, int wz) {
+    static const int OFFSETS[][3] = {
+        { 0, 0, 0}, { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1},
+        { 0, 1, 0}, { 0,-1, 0}
+    };
+    for (const auto& o : OFFSETS) {
+        activateWaterAt(wx + o[0], wy + o[1], wz + o[2]);
+    }
+}
+
+bool World::setExistingWorldBlock(int wx, int wy, int wz, BlockType type) {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return false;
+    ChunkPos pos = worldToChunk(wx, wz);
+    int lx = wx - pos.x * CHUNK_SIZE_X;
+    int lz = wz - pos.z * CHUNK_SIZE_Z;
+    auto it = chunks_.find(pos);
+    if (it == chunks_.end()) return false;
+    it->second->setBlock(lx, wy, lz, type);
+    if (type == BlockType::Water && it->second->getWaterLevel(lx, wy, lz) == 0) {
+        it->second->setWaterLevel(lx, wy, lz, 8);
+    }
+    it->second->is_dirty = true;
+    return true;
 }
 
 BlockType World::getWorldBlock(int wx, int wy, int wz) const {
@@ -28,14 +87,29 @@ BlockType World::getWorldBlock(int wx, int wy, int wz) const {
 
 bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return false;
-    int cx = floorDiv(wx, CHUNK_SIZE_X);
-    int cz = floorDiv(wz, CHUNK_SIZE_Z);
-    int lx = wx - cx * CHUNK_SIZE_X;
-    int lz = wz - cz * CHUNK_SIZE_Z;
-    auto it = chunks_.find({cx, cz});
-    if (it == chunks_.end()) return false;
-    it->second->setBlock(lx, wy, lz, type);
-    it->second->is_dirty = true;
+    BlockType old = getWorldBlock(wx, wy, wz);
+    if (!setExistingWorldBlock(wx, wy, wz, type)) return false;
+
+    flowing_water_.erase({wx, wy, wz});
+    if (type == BlockType::Water || old == BlockType::Water) {
+        ChunkPos pos = worldToChunk(wx, wz);
+        auto it = chunks_.find(pos);
+        if (it != chunks_.end()) {
+            int lx = wx - pos.x * CHUNK_SIZE_X;
+            int lz = wz - pos.z * CHUNK_SIZE_Z;
+            it->second->setWaterLevel(lx, wy, lz, type == BlockType::Water ? 8 : 0);
+        }
+        activateWaterNeighborhood(wx, wy, wz);
+    } else {
+        static const int OFFSETS[][3] = {
+            { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1}, { 0, 1, 0}
+        };
+        for (const auto& o : OFFSETS) {
+            if (isWaterBlock(wx + o[0], wy + o[1], wz + o[2])) {
+                activateWaterNeighborhood(wx + o[0], wy + o[1], wz + o[2]);
+            }
+        }
+    }
     return true;
 }
 
@@ -50,4 +124,95 @@ Chunk* World::getOrCreateChunk(ChunkPos pos) {
     Chunk* raw = chunk.get();
     chunks_[pos] = std::move(chunk);
     return raw;
+}
+
+std::vector<WorldPos> World::stepWater(ChunkPos min_chunk, ChunkPos max_chunk) {
+    if (active_water_.empty()) return {};
+
+    std::vector<WorldPos> seeds;
+    seeds.reserve(active_water_.size());
+    for (const WorldPos& pos : active_water_) {
+        if (inChunkRange(worldToChunk(pos.x, pos.z), min_chunk, max_chunk)) {
+            seeds.push_back(pos);
+        }
+    }
+    active_water_.clear();
+    if (seeds.empty()) return {};
+
+    std::unordered_set<WorldPos, WorldPosHash> candidates;
+    static const int OFFSETS[][3] = {
+        { 0, 0, 0}, { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1},
+        { 0, 1, 0}, { 0,-1, 0}
+    };
+
+    for (const WorldPos& pos : seeds) {
+        for (const auto& o : OFFSETS) {
+            WorldPos p = {pos.x + o[0], pos.y + o[1], pos.z + o[2]};
+            if (p.y < 0 || p.y >= CHUNK_SIZE_Y) continue;
+            if (!inChunkRange(worldToChunk(p.x, p.z), min_chunk, max_chunk)) continue;
+            candidates.insert(p);
+        }
+    }
+
+    std::vector<WorldPos> changed;
+    changed.reserve(candidates.size());
+
+    for (const WorldPos& pos : candidates) {
+        BlockType old_type = getWorldBlock(pos.x, pos.y, pos.z);
+        uint8_t old_level = 0;
+        bool was_flowing = isFlowingWater(pos.x, pos.y, pos.z, &old_level);
+        bool was_source = (old_type == BlockType::Water && !was_flowing);
+
+        if (isSolidBlock(old_type)) continue;
+        if (was_source) continue;
+
+        uint8_t best_level = 255;
+
+        if (pos.y + 1 < CHUNK_SIZE_Y && isWaterBlock(pos.x, pos.y + 1, pos.z)) {
+            uint8_t above_level = 0;
+            if (isFlowingWater(pos.x, pos.y + 1, pos.z, &above_level))
+                best_level = std::min(best_level, above_level);
+            else
+                best_level = std::min<uint8_t>(best_level, 1);
+        }
+
+        static const int HOFFSETS[][2] = {{ 1, 0}, {-1, 0}, {0, 1}, {0,-1}};
+        for (const auto& o : HOFFSETS) {
+            int nx = pos.x + o[0];
+            int nz = pos.z + o[1];
+            if (!isWaterBlock(nx, pos.y, nz)) continue;
+
+            uint8_t neighbor_level = 0;
+            uint8_t candidate = 1;
+            if (isFlowingWater(nx, pos.y, nz, &neighbor_level))
+                candidate = static_cast<uint8_t>(neighbor_level + 1);
+            if (candidate <= 4)
+                best_level = std::min(best_level, candidate);
+        }
+
+        if (best_level <= 4) {
+            if (old_type != BlockType::Water || !was_flowing || old_level != best_level) {
+                if (setExistingWorldBlock(pos.x, pos.y, pos.z, BlockType::Water)) {
+                    ChunkPos cpos = worldToChunk(pos.x, pos.z);
+                    auto it = chunks_.find(cpos);
+                    if (it != chunks_.end()) {
+                        int lx = pos.x - cpos.x * CHUNK_SIZE_X;
+                        int lz = pos.z - cpos.z * CHUNK_SIZE_Z;
+                        it->second->setWaterLevel(lx, pos.y, lz, best_level == 0 ? 8 : best_level);
+                    }
+                    flowing_water_[pos] = best_level;
+                    changed.push_back(pos);
+                    activateWaterNeighborhood(pos.x, pos.y, pos.z);
+                }
+            }
+        } else if (was_flowing) {
+            if (setExistingWorldBlock(pos.x, pos.y, pos.z, BlockType::Air)) {
+                flowing_water_.erase(pos);
+                changed.push_back(pos);
+                activateWaterNeighborhood(pos.x, pos.y, pos.z);
+            }
+        }
+    }
+
+    return changed;
 }
