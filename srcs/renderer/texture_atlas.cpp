@@ -263,6 +263,40 @@ static void fillLeaves(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
     }
 }
 
+// ─── Grass side ──────────────────────────────────────────────────────────────
+// Top 4 texels (high py = top of rendered face) are grass green; rest is dirt.
+static void fillGrassSide(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    const int GREEN_ROWS = 4;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int r, g, b;
+            if (py >= tw - GREEN_ROWS) {
+                // grass strip
+                int n1 = hash2(px, py, 7);
+                r = 58  + (n1 - 128) * 18 / 128;
+                g = 140 + (n1 - 128) * 28 / 128;
+                b = 40  + (n1 - 128) *  8 / 128;
+            } else {
+                // dirt
+                int n = hash2(px, py, 42);
+                if      (n < 12)  { r =  74; g =  47; b =  28; }
+                else if (n < 75)  { r = 101; g =  67; b =  42; }
+                else if (n > 247) { r = 192; g = 148; b = 108; }
+                else if (n > 218) { r = 162; g = 120; b =  87; }
+                else              { r = 134; g =  96; b =  67; }
+                int d = hash2(px, py, 199);
+                r += (d & 7) - 4;
+                g += ((d >> 3) & 3) - 2;
+            }
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
 // ─── Solid color (for Air / unused tiles) ────────────────────────────────────
 static void fillSolid(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
                        uint8_t r, uint8_t g, uint8_t b) {
@@ -295,7 +329,8 @@ bool TextureAtlas::generate() {
     fillSnow (pixels, atlas_w, 5, 0);
     fillWater(pixels, atlas_w, 6, 0);
     fillWood (pixels, atlas_w, 7, 0);
-    fillLeaves(pixels, atlas_w, 0, 1);
+    fillLeaves   (pixels, atlas_w, 0, 1);
+    fillGrassSide(pixels, atlas_w, 1, 1);  // tile 9 = GrassSide (col=1, row=1)
 
     glGenTextures(1, &tex_id_);
     glBindTexture(GL_TEXTURE_2D, tex_id_);

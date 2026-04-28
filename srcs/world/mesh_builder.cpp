@@ -32,12 +32,16 @@ static const float FACE_UVS[4][2] = {
 // Index offsets for 2 triangles from 4 verts (CCW)
 static const uint32_t QUAD_INDICES[6] = {0, 1, 2, 2, 3, 0};
 
-// Atlas UV helper: given BlockType, return (u_offset, v_offset, tile_w, tile_h)
-static void getAtlasUV(BlockType type, float& u0, float& v0, float& uw, float& vh) {
-    // Atlas is ATLAS_COLS wide, 4 rows tall, each tile 1/ATLAS_COLS x 1/4
+// Atlas UV helper: given BlockType and Face, return (u_offset, v_offset, tile_w, tile_h)
+static void getAtlasUV(BlockType type, Face face, float& u0, float& v0, float& uw, float& vh) {
     const int cols = ATLAS_COLS;  // 8
     const int rows = 4;
-    const int tile = (int)type;  // Air=0, Grass=1, Dirt=2, Stone=3, Sand=4, Snow=5
+    int tile = (int)type;
+    if (type == BlockType::Grass) {
+        if      (face == Face::Top)    tile = 1;  // green top
+        else if (face == Face::Bottom) tile = 2;  // dirt bottom
+        else                           tile = 9;  // dirt+strip sides (col=1, row=1)
+    }
     u0 = (float)(tile % cols) / (float)cols;
     v0 = (float)(tile / cols) / (float)rows;
     uw = 1.0f / (float)cols;
@@ -77,7 +81,7 @@ void MeshBuilder::addFace(
     BlockType type)
 {
     float u0, v0, uw, vh;
-    getAtlasUV(type, u0, v0, uw, vh);
+    getAtlasUV(type, face, u0, v0, uw, vh);
 
     const float (*fv)[3] = FACE_VERTS[(int)face];
     const float*  fn     = FACE_NORMALS[(int)face];
