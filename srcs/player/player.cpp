@@ -135,7 +135,12 @@ void Player::update(float dt,
         if (input_.isHeld(GLFW_KEY_A)) dp -= hright * wsp * dt;
 
         if (input_.isHeld(GLFW_KEY_SPACE)) {
-            velocity_y_ = WATER_SWIM_SPEED;
+            // At the water surface (block above eye is not water): jump out with full velocity
+            int eye_x = (int)std::floor(pos.x);
+            int eye_y = (int)std::floor(pos.y);
+            int eye_z = (int)std::floor(pos.z);
+            bool at_surface = !isWater(eye_x, eye_y + 1, eye_z);
+            velocity_y_ = at_surface ? JUMP_VELOCITY : WATER_SWIM_SPEED;
         } else if (input_.isHeld(GLFW_KEY_LEFT_CONTROL)) {
             velocity_y_ = -WATER_SWIM_SPEED;
         } else {
