@@ -6,3 +6,4 @@ ft_vox
 *.d
 .DS_Store
 .claude
+.cache

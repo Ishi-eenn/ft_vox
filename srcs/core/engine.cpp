@@ -142,6 +142,14 @@ bool Engine::init(uint32_t seed, int width, int height) {
     glfwMakeContextCurrent(window_);
     glfwSwapInterval(1);  // vsync
 
+    // On Retina/HiDPI displays the framebuffer is larger than the window size
+    // reported by glfwGetVideoMode (logical pixels).  Use the actual framebuffer
+    // dimensions for the OpenGL viewport and aspect ratio.
+    int fb_w, fb_h;
+    glfwGetFramebufferSize(window_, &fb_w, &fb_h);
+    width_  = fb_w;
+    height_ = fb_h;
+
     // ── Renderer (loads GLAD + sets up OpenGL state) ─────────────────────────
     if (!impl_->renderer.init(window_)) {
         fprintf(stderr, "[Engine] Renderer::init failed\n");
