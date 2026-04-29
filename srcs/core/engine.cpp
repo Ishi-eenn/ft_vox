@@ -176,9 +176,10 @@ bool Engine::init(uint32_t seed, int width, int height) {
 void Engine::run() {
     using Clock = std::chrono::steady_clock;
     auto prev   = Clock::now();
-    float fps_timer = 0.0f;
-    int fps_frames = 0;
-    int fps_display = 0;
+    float fps_timer       = 0.0f;
+    int   fps_frames      = 0;
+    int   fps_display     = 0;
+    float rd_adjust_timer = 0.0f;  // throttle: adjust render distance at most once/sec
 
     while (running_) {
         // ── Delta time ────────────────────────────────────────────────────────
@@ -186,12 +187,27 @@ void Engine::run() {
         float dt  = std::chrono::duration<float>(now - prev).count();
         prev      = now;
         if (dt > 0.1f) dt = 0.1f;  // cap to prevent spiral-of-death
-        fps_timer += dt;
+        fps_timer       += dt;
+        rd_adjust_timer += dt;
         ++fps_frames;
         if (fps_timer >= 0.25f) {
             fps_display = (int)std::round((float)fps_frames / fps_timer);
-            fps_timer = 0.0f;
+            fps_timer  = 0.0f;
             fps_frames = 0;
+        }
+
+        // ── Dynamic render distance ───────────────────────────────────────────
+        // Adjust at most once per second with hysteresis to avoid oscillation:
+        //   < 30 FPS → shrink  (free up GPU work)
+        //   > 55 FPS → grow    (use available headroom)
+        if (rd_adjust_timer >= 1.0f) {
+            rd_adjust_timer = 0.0f;
+            int cur = impl_->chunk_mgr->renderDistance();
+            if (fps_display > 0 && fps_display < 30 && cur > RENDER_DISTANCE_MIN) {
+                impl_->chunk_mgr->setRenderDistance(cur - 1);
+            } else if (fps_display > 55 && cur < RENDER_DISTANCE_MAX) {
+                impl_->chunk_mgr->setRenderDistance(cur + 1);
+            }
         }
 
         // ── Input + movement ──────────────────────────────────────────────────

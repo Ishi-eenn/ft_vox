@@ -44,8 +44,8 @@ void ChunkManager::update(float playerX, float playerZ, uint64_t frame) {
     loadRadius(center);
     if (frame % 3 == 0) {
         auto changed_water = world_.stepWater(
-            {center.x - RENDER_DISTANCE, center.z - RENDER_DISTANCE},
-            {center.x + RENDER_DISTANCE, center.z + RENDER_DISTANCE}
+            {center.x - render_distance_, center.z - render_distance_},
+            {center.x + render_distance_, center.z + render_distance_}
         );
         for (const WorldPos& pos : changed_water) {
             rebuildModifiedBlock(pos.x, pos.z, *this);
@@ -61,8 +61,14 @@ void ChunkManager::update(float playerX, float playerZ, uint64_t frame) {
     }
 }
 
+void ChunkManager::setRenderDistance(int rd) {
+    if (rd < RENDER_DISTANCE_MIN) rd = RENDER_DISTANCE_MIN;
+    if (rd > RENDER_DISTANCE_MAX) rd = RENDER_DISTANCE_MAX;
+    render_distance_ = rd;
+}
+
 void ChunkManager::loadRadius(ChunkPos center) {
-    const int rd = RENDER_DISTANCE;
+    const int rd = render_distance_;
     for (int dx = -rd; dx <= rd; ++dx) {
         for (int dz = -rd; dz <= rd; ++dz) {
             if (dx * dx + dz * dz > rd * rd) continue;

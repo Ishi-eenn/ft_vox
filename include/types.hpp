@@ -68,7 +68,9 @@ struct Vertex {
 constexpr int   CHUNK_SIZE_X         = 16;
 constexpr int   CHUNK_SIZE_Y         = 256;
 constexpr int   CHUNK_SIZE_Z         = 16;
-constexpr int   RENDER_DISTANCE      = 10;    // chunks
+constexpr int   RENDER_DISTANCE_MIN  = 1;     // chunks (= 16 blocks, satisfies 14-cube floor)
+constexpr int   RENDER_DISTANCE_MAX  = 10;    // chunks (= 160 blocks)
+constexpr int   RENDER_DISTANCE      = RENDER_DISTANCE_MAX;  // initial value
 constexpr int   MAX_LOADED_CHUNKS    = 500;
 constexpr float PLAYER_SPEED_NORMAL  = 1.0f;  // blocks/sec
 constexpr float PLAYER_SPEED_FAST    = 20.0f; // blocks/sec (20x key)
