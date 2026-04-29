@@ -470,7 +470,7 @@ void Renderer::setTimeOfDay(float t) {
             sky_ground_ [i] = kNightGround [i];
             sun_color_  [i] = kSunColorDay [i];
         }
-        ambient_      = 0.04f;
+        ambient_      = 0.10f;
         sun_strength_ = 0.0f;
     } else if (elev < 0.15f) {
         // Dawn / dusk transition
@@ -481,7 +481,7 @@ void Renderer::setTimeOfDay(float t) {
         // Sun colour depends on whether we're rising (t < 0.5) or setting (t > 0.5)
         const float* sunrise_col = (t < 0.5f) ? kSunColorDawn : kSunColorDusk;
         lerpCol(sun_color_, kSunColorDay, sunrise_col, 1.0f - f);
-        ambient_      = 0.04f + 0.14f * f;
+        ambient_      = 0.10f + 0.08f * f;
         sun_strength_ = 0.30f * f;
     } else {
         // Daytime — sky deepens towards zenith as sun rises higher
