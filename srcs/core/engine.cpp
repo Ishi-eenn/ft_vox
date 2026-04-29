@@ -210,8 +210,13 @@ void Engine::run() {
             }
         }
 
-        // ── Input + movement (Player calls glfwPollEvents internally) ─────────
-        impl_->player.update(dt);
+        // ── Input + movement ──────────────────────────────────────────────────
+        // isSolid: block query callback used by Player for AABB collision.
+        auto isSolid = [&](int x, int y, int z) {
+            BlockType t = impl_->world.getWorldBlock(x, y, z);
+            return t != BlockType::Air && t != BlockType::Water;
+        };
+        impl_->player.update(dt, isSolid);
         if (impl_->player.shouldClose()) break;
 
         // ── Window resize ─────────────────────────────────────────────────────
