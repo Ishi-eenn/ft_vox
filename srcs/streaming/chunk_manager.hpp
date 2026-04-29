@@ -26,6 +26,10 @@ public:
     // Also rebuilds the 4 cardinal neighbors if the edited block was on a border.
     void rebuildChunkAt(ChunkPos pos);
 
+    // Dynamic render distance — clamped to [RENDER_DISTANCE_MIN, RENDER_DISTANCE_MAX].
+    void setRenderDistance(int rd);
+    int  renderDistance() const { return render_distance_; }
+
 private:
     void loadRadius(ChunkPos center);
     void uploadPending(int max_per_frame);
@@ -40,4 +44,5 @@ private:
 
     std::queue<Chunk*> upload_queue_;
     uint64_t           last_debug_frame_ = 0;
+    int                render_distance_  = RENDER_DISTANCE;
 };
