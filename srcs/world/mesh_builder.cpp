@@ -145,6 +145,11 @@ static float getFaceTopHeight(const float water_top[4], Face face, int vertex_in
     }
 }
 
+static float getFaceAverageHeight(const float water_top[4], Face face) {
+    return 0.5f * (getFaceTopHeight(water_top, face, 0) +
+                   getFaceTopHeight(water_top, face, 1));
+}
+
 void MeshBuilder::addFace(
     std::vector<Vertex>& verts,
     std::vector<uint32_t>& indices,
@@ -192,6 +197,7 @@ void MeshBuilder::addFace(
 void MeshBuilder::build(Chunk& chunk, const ChunkNeighbors& neighbors) {
     chunk.vertices.clear();
     chunk.indices.clear();
+    chunk.indices_water.clear();
 
     // Estimate capacity: ~6 faces * some blocks
     chunk.vertices.reserve(4096);
@@ -215,33 +221,31 @@ void MeshBuilder::build(Chunk& chunk, const ChunkNeighbors& neighbors) {
                     if (t == BlockType::Water) {
                         if (f == (int)Face::Top) {
                             if (nb != BlockType::Water) {
-                                addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);
+                                addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                             }
                         } else if (f == (int)Face::North || f == (int)Face::South || f == (int)Face::East || f == (int)Face::West) {
                             if (nb == BlockType::Air) {
-                                addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);
+                                addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                             } else if (nb == BlockType::Water) {
                                 float self_top[4];
                                 float neighbor_top[4];
                                 computeWaterTopHeights(self_top, x, y, z, chunk, neighbors);
                                 computeWaterTopHeights(neighbor_top, nx, ny, nz, chunk, neighbors);
 
-                                float self_a = getFaceTopHeight(self_top, (Face)f, 0);
-                                float self_b = getFaceTopHeight(self_top, (Face)f, 1);
                                 Face opposite = Face::North;
                                 if (f == (int)Face::North) opposite = Face::South;
                                 if (f == (int)Face::South) opposite = Face::North;
                                 if (f == (int)Face::East)  opposite = Face::West;
                                 if (f == (int)Face::West)  opposite = Face::East;
-                                float nb_a = getFaceTopHeight(neighbor_top, opposite, 0);
-                                float nb_b = getFaceTopHeight(neighbor_top, opposite, 1);
+                                float self_avg = getFaceAverageHeight(self_top, (Face)f);
+                                float nb_avg   = getFaceAverageHeight(neighbor_top, opposite);
 
-                                if (self_a > nb_a + 0.01f || self_b > nb_b + 0.01f) {
-                                    addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);
+                                if (self_avg > nb_avg + 0.01f) {
+                                    addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                                 }
                             }
                         } else if (nb == BlockType::Air) {
-                            addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);
+                            addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                         }
                     } else if (nb == BlockType::Air || nb == BlockType::Water) {
                         addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);

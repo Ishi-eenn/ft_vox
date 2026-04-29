@@ -49,70 +49,6 @@ bool World::isFlowingWater(int wx, int wy, int wz, uint8_t* level_out) const {
     return true;
 }
 
-int World::flowSearchCost(int wx, int wy, int wz, int depth, int from_dir) const {
-    static const int DX[4] = { 0, 0,-1, 1};
-    static const int DZ[4] = {-1, 1, 0, 0};
-
-    if (depth >= 4) return 1000;
-    if (!canFlowInto(wx, wy, wz)) return 1000;
-    if (getWorldBlock(wx, wy - 1, wz) == BlockType::Air) return depth;
-
-    int best = 1000;
-    for (int dir = 0; dir < 4; ++dir) {
-        if (from_dir >= 0 && (dir ^ 1) == from_dir) continue;
-        int nx = wx + DX[dir];
-        int nz = wz + DZ[dir];
-        if (!canFlowInto(nx, wy, nz)) continue;
-        best = std::min(best, flowSearchCost(nx, wy, nz, depth + 1, dir));
-    }
-    return best;
-}
-
-bool World::canFlowFromTo(int from_x, int from_y, int from_z, int to_x, int to_y, int to_z, uint8_t* out_depth) const {
-    static const int DX[4] = { 0, 0,-1, 1};
-    static const int DZ[4] = {-1, 1, 0, 0};
-
-    if (!isWaterBlock(from_x, from_y, from_z)) return false;
-    if (from_y != to_y) return false;
-
-    uint8_t from_depth = 0;
-    bool from_source = isSourceWater(from_x, from_y, from_z);
-    bool from_flowing = isFlowingWater(from_x, from_y, from_z, &from_depth);
-    if (!from_source && !from_flowing) return false;
-
-    uint8_t base_depth = from_source ? 0 : from_depth;
-    if (base_depth >= 7) return false;
-
-    int min_cost = 1000;
-    bool chosen[4] = {false, false, false, false};
-
-    for (int dir = 0; dir < 4; ++dir) {
-        int nx = from_x + DX[dir];
-        int nz = from_z + DZ[dir];
-        if (!canFlowInto(nx, from_y, nz)) continue;
-
-        int cost = (getWorldBlock(nx, from_y - 1, nz) == BlockType::Air)
-            ? 0
-            : flowSearchCost(nx, from_y, nz, 1, dir);
-
-        if (cost < min_cost) {
-            min_cost = cost;
-            chosen[0] = chosen[1] = chosen[2] = chosen[3] = false;
-            chosen[dir] = true;
-        } else if (cost == min_cost) {
-            chosen[dir] = true;
-        }
-    }
-
-    for (int dir = 0; dir < 4; ++dir) {
-        if (!chosen[dir]) continue;
-        if (from_x + DX[dir] == to_x && from_z + DZ[dir] == to_z) {
-            if (out_depth) *out_depth = static_cast<uint8_t>(base_depth + 1);
-            return true;
-        }
-    }
-    return false;
-}
 
 void World::activateWaterAt(int wx, int wy, int wz) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return;
@@ -167,7 +103,7 @@ bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
         if (it != chunks_.end()) {
             int lx = wx - pos.x * CHUNK_SIZE_X;
             int lz = wz - pos.z * CHUNK_SIZE_Z;
-                        it->second->setWaterLevel(lx, wy, lz, type == BlockType::Water ? 8 : 0);
+            it->second->setWaterLevel(lx, wy, lz, type == BlockType::Water ? 8 : 0);
         }
         activateWaterNeighborhood(wx, wy, wz);
     } else {
@@ -196,15 +132,28 @@ Chunk* World::getOrCreateChunk(ChunkPos pos) {
     return raw;
 }
 
+// Minecraft-style water propagation.
+//
+// Level encoding in flowing_water_ and water_levels:
+//   depth 0  → stored level 8  (falling water: directly below source/water)
+//   depth 1  → stored level 1  (1 block horizontal from source, tallest flowing)
+//   depth 7  → stored level 7  (7 blocks horizontal from source, flattest)
+//   not in flowing_water_  →  permanent source block
+//
+// Each non-source block's desired depth:
+//   • Has water directly above → depth 0 (full falling column)
+//   • Otherwise → min(horizontal_neighbor_depth) + 1, capped at 7
+//
+// If desired depth > 7: block should be air (too far from any source).
+// No directional-preference logic → stable, no oscillation.
 std::vector<WorldPos> World::stepWater(ChunkPos min_chunk, ChunkPos max_chunk) {
     if (active_water_.empty()) return {};
 
     std::vector<WorldPos> seeds;
     seeds.reserve(active_water_.size());
     for (const WorldPos& pos : active_water_) {
-        if (inChunkRange(worldToChunk(pos.x, pos.z), min_chunk, max_chunk)) {
+        if (inChunkRange(worldToChunk(pos.x, pos.z), min_chunk, max_chunk))
             seeds.push_back(pos);
-        }
     }
     active_water_.clear();
     if (seeds.empty()) return {};
@@ -214,7 +163,6 @@ std::vector<WorldPos> World::stepWater(ChunkPos min_chunk, ChunkPos max_chunk) {
         { 0, 0, 0}, { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1},
         { 0, 1, 0}, { 0,-1, 0}
     };
-
     for (const WorldPos& pos : seeds) {
         for (const auto& o : OFFSETS) {
             WorldPos p = {pos.x + o[0], pos.y + o[1], pos.z + o[2]};
@@ -227,42 +175,67 @@ std::vector<WorldPos> World::stepWater(ChunkPos min_chunk, ChunkPos max_chunk) {
     std::vector<WorldPos> changed;
     changed.reserve(candidates.size());
 
+    static const int HOFFSETS[][2] = {{ 1, 0}, {-1, 0}, {0, 1}, {0,-1}};
+
     for (const WorldPos& pos : candidates) {
         BlockType old_type = getWorldBlock(pos.x, pos.y, pos.z);
-        uint8_t old_level = 0;
-        bool was_flowing = isFlowingWater(pos.x, pos.y, pos.z, &old_level);
-        bool was_source = (old_type == BlockType::Water && !was_flowing);
+        uint8_t old_depth = 0;
+        bool was_flowing = isFlowingWater(pos.x, pos.y, pos.z, &old_depth);
+        bool was_source  = (old_type == BlockType::Water && !was_flowing);
 
         if (isSolidBlock(old_type)) continue;
-        if (was_source) continue;
+        if (was_source) continue;  // permanent source blocks are never modified
 
-        uint8_t best_level = 255;
+        // ── Compute desired flowing depth ─────────────────────────────────────
+        // 255 = should become air; 0 = falling (full column); 1-7 = horizontal spread
+        uint8_t desired_depth = 255;
 
-        if (pos.y + 1 < CHUNK_SIZE_Y && isWaterBlock(pos.x, pos.y + 1, pos.z)) {
-            best_level = 0;
+        // Priority 1: water directly above → full falling column
+        if (isWaterBlock(pos.x, pos.y + 1, pos.z)) {
+            desired_depth = 0;
         } else {
-            static const int HOFFSETS[][2] = {{ 1, 0}, {-1, 0}, {0, 1}, {0,-1}};
+            // Priority 2: propagate from horizontal neighbors.
+            // A neighbor only contributes horizontal flow if it has solid ground
+            // beneath it — water with air/water below falls straight down instead
+            // of spreading sideways (Minecraft behavior).
+            uint8_t min_depth = 255;
             for (const auto& o : HOFFSETS) {
-                int nx = pos.x + o[0];
-                int nz = pos.z + o[1];
-                uint8_t candidate = 0;
-                if (canFlowFromTo(nx, pos.y, nz, pos.x, pos.y, pos.z, &candidate)) {
-                    if (candidate <= 7) best_level = std::min(best_level, candidate);
-                }
+                int nx = pos.x + o[0], nz = pos.z + o[1];
+                if (getWorldBlock(nx, pos.y, nz) != BlockType::Water) continue;
+
+                BlockType below_neighbor = getWorldBlock(nx, pos.y - 1, nz);
+                if (below_neighbor == BlockType::Air || below_neighbor == BlockType::Water)
+                    continue;  // neighbor is falling — doesn't spread sideways
+
+                uint8_t nd;
+                bool nf = isFlowingWater(nx, pos.y, nz, &nd);
+                if (!nf) nd = 0;  // source block = depth 0
+
+                if (nd < min_depth) min_depth = nd;
+            }
+            if (min_depth < 255 && min_depth + 1 <= 7) {
+                desired_depth = min_depth + 1;
             }
         }
 
-        if (best_level <= 7) {
-            if (old_type != BlockType::Water || !was_flowing || old_level != best_level) {
+        // ── Apply changes ─────────────────────────────────────────────────────
+        bool should_be_water = (desired_depth <= 7);  // 0-7 inclusive
+        uint8_t stored_level = (desired_depth == 0) ? 8 : desired_depth;
+
+        if (should_be_water) {
+            bool state_changed = (old_type != BlockType::Water)
+                              || (!was_flowing)
+                              || (old_depth != desired_depth);
+            if (state_changed) {
                 if (setExistingWorldBlock(pos.x, pos.y, pos.z, BlockType::Water)) {
                     ChunkPos cpos = worldToChunk(pos.x, pos.z);
                     auto it = chunks_.find(cpos);
                     if (it != chunks_.end()) {
                         int lx = pos.x - cpos.x * CHUNK_SIZE_X;
                         int lz = pos.z - cpos.z * CHUNK_SIZE_Z;
-                        it->second->setWaterLevel(lx, pos.y, lz, best_level == 0 ? 8 : best_level);
+                        it->second->setWaterLevel(lx, pos.y, lz, stored_level);
                     }
-                    flowing_water_[pos] = best_level;
+                    flowing_water_[pos] = desired_depth;
                     changed.push_back(pos);
                     activateWaterNeighborhood(pos.x, pos.y, pos.z);
                 }

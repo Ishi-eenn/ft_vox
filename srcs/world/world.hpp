@@ -28,13 +28,11 @@ private:
     static ChunkPos worldToChunk(int wx, int wz);
     bool setExistingWorldBlock(int wx, int wy, int wz, BlockType type);
     bool isSourceWater(int wx, int wy, int wz) const;
-    bool isFlowingWater(int wx, int wy, int wz, uint8_t* level_out = nullptr) const;
+    bool isFlowingWater(int wx, int wy, int wz, uint8_t* depth_out = nullptr) const;
     bool isWaterBlock(int wx, int wy, int wz) const;
     bool isSolidBlock(BlockType type) const;
     bool canFlowInto(int wx, int wy, int wz) const;
     bool inChunkRange(ChunkPos pos, ChunkPos min_chunk, ChunkPos max_chunk) const;
-    int  flowSearchCost(int wx, int wy, int wz, int depth, int from_dir) const;
-    bool canFlowFromTo(int from_x, int from_y, int from_z, int to_x, int to_y, int to_z, uint8_t* out_depth = nullptr) const;
     void activateWaterAt(int wx, int wy, int wz);
     void activateWaterNeighborhood(int wx, int wy, int wz);
 

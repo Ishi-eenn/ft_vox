@@ -82,11 +82,12 @@ constexpr int   SEA_LEVEL            = 42;    // y at which water surface sits
 
 // ─── Chunk data ───────────────────────────────────────────────────────────────
 struct ChunkGpuMesh {
-    uint32_t vao       = 0;
-    uint32_t vbo       = 0;
-    uint32_t ebo       = 0;
-    int32_t  idx_count = 0;
-    bool     uploaded  = false;
+    uint32_t vao             = 0;
+    uint32_t vbo             = 0;
+    uint32_t ebo             = 0;        // opaque + water indices (packed)
+    int32_t  idx_count       = 0;        // opaque index count
+    int32_t  idx_count_water = 0;        // water index count (after opaque in EBO)
+    bool     uploaded        = false;
 };
 
 struct Chunk {
@@ -99,7 +100,8 @@ struct Chunk {
 
     // CPU mesh (built by MeshBuilder, consumed by Renderer upload)
     std::vector<Vertex>   vertices;
-    std::vector<uint32_t> indices;
+    std::vector<uint32_t> indices;        // opaque faces
+    std::vector<uint32_t> indices_water;  // transparent (water) faces
 
     // GPU mesh (owned by Renderer)
     ChunkGpuMesh gpu;

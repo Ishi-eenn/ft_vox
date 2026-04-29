@@ -18,6 +18,7 @@ public:
     void destroyChunkMesh(Chunk* chunk) override;
     void beginFrame() override;
     void drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) override;
+    void drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4);
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
     void drawHud(int fps);
     void endFrame() override;

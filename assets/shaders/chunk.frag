@@ -9,5 +9,5 @@ out vec4 FragColor;
 void main() {
     vec4 col = texture(uAtlas, vUV);
     if (col.a < 0.1) discard;
-    FragColor = vec4(col.rgb * vLight, 1.0);
+    FragColor = vec4(col.rgb * vLight, col.a);
 }
