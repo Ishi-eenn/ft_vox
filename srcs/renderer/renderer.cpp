@@ -22,8 +22,10 @@ Renderer::~Renderer() {
     chunk_shader_.destroy();
     sky_shader_.destroy();
     hud_shader_.destroy();
-    if (hud_vao_) { glDeleteVertexArrays(1, &hud_vao_); hud_vao_ = 0; }
-    if (hud_vbo_) { glDeleteBuffers(1, &hud_vbo_);      hud_vbo_ = 0; }
+    if (hud_vao_)     { glDeleteVertexArrays(1, &hud_vao_);     hud_vao_     = 0; }
+    if (hud_vbo_)     { glDeleteBuffers(1, &hud_vbo_);          hud_vbo_     = 0; }
+    if (overlay_vao_) { glDeleteVertexArrays(1, &overlay_vao_); overlay_vao_ = 0; }
+    if (overlay_vbo_) { glDeleteBuffers(1, &overlay_vbo_);      overlay_vbo_ = 0; }
     atlas_.destroy();
     skybox_.destroy();
 }
@@ -81,11 +83,26 @@ bool Renderer::init(GLFWwindow* window) {
 void Renderer::initHud() {
     hud_shader_.load("assets/shaders/hud.vert", "assets/shaders/hud.frag");
 
+    // HUD (crosshair + FPS digits) — dynamic line geometry
     glGenVertexArrays(1, &hud_vao_);
     glGenBuffers(1, &hud_vbo_);
     glBindVertexArray(hud_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
     glBufferData(GL_ARRAY_BUFFER, 256 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
+    glBindVertexArray(0);
+
+    // Underwater overlay — fullscreen quad (two triangles in NDC)
+    static const float quad[] = {
+        -1.f, -1.f,  1.f, -1.f,  1.f,  1.f,
+        -1.f, -1.f,  1.f,  1.f, -1.f,  1.f,
+    };
+    glGenVertexArrays(1, &overlay_vao_);
+    glGenBuffers(1, &overlay_vbo_);
+    glBindVertexArray(overlay_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, overlay_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
     glBindVertexArray(0);
@@ -155,8 +172,22 @@ void Renderer::drawHud(int fps) {
 
     glDisable(GL_DEPTH_TEST);
     hud_shader_.use();
+    hud_shader_.setVec4("uColor", 1.0f, 1.0f, 1.0f, 0.9f);
     glBindVertexArray(hud_vao_);
     glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ---------------------------------------------------------------------------
+// drawUnderwaterOverlay()
+// ---------------------------------------------------------------------------
+void Renderer::drawUnderwaterOverlay() {
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+    hud_shader_.setVec4("uColor", 0.0f, 0.25f, 0.65f, 0.40f);
+    glBindVertexArray(overlay_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 }

@@ -138,3 +138,9 @@ void Shader::setVec3(const char* name, float x, float y, float z) const {
     if (loc != -1)
         glUniform3f(loc, x, y, z);
 }
+
+void Shader::setVec4(const char* name, float x, float y, float z, float w) const {
+    GLint loc = glGetUniformLocation(program_, name);
+    if (loc != -1)
+        glUniform4f(loc, x, y, z, w);
+}
