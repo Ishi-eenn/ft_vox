@@ -101,5 +101,5 @@ target_link_libraries(
 set_target_properties(
   ft_vox
   PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}
 )

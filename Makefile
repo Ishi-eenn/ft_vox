@@ -1,6 +1,7 @@
 BUILD_DIR := build
 CONFIGURE := cmake -S . -B $(BUILD_DIR)
 BUILD := cmake --build $(BUILD_DIR)
+RUN_ARGS := $(filter-out run, $(MAKECMDGOALS))
 
 .PHONY: all configure run clean fclean re
 
@@ -10,13 +11,16 @@ all: configure
 configure:
 	$(CONFIGURE)
 
-run: all
-	./$(BUILD_DIR)/bin/ft_vox
+run:
+	./ft_vox $(RUN_ARGS)
 
 clean:
-	cmake --build $(BUILD_DIR) --target clean
+	if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean; fi
 
-fclean:
-	rm -rf $(BUILD_DIR)
+fclean: clean
+	rm -f ft_vox
 
 re: fclean all
+
+%:
+	@:
