@@ -38,17 +38,17 @@ static RayHit castRay(const glm::vec3& origin, const glm::vec3& dir,
 {
     RayHit result;
 
-    int ix = (int)std::floor(origin.x);
-    int iy = (int)std::floor(origin.y);
-    int iz = (int)std::floor(origin.z);
+    glm::ivec3 ipos = glm::ivec3(glm::floor(origin));
+    int ix = ipos.x, iy = ipos.y, iz = ipos.z;
 
     int sx = (dir.x >= 0.f) ? 1 : -1;
     int sy = (dir.y >= 0.f) ? 1 : -1;
     int sz = (dir.z >= 0.f) ? 1 : -1;
 
-    float tdx = (std::abs(dir.x) > 1e-6f) ? std::abs(1.f / dir.x) : 1e30f;
-    float tdy = (std::abs(dir.y) > 1e-6f) ? std::abs(1.f / dir.y) : 1e30f;
-    float tdz = (std::abs(dir.z) > 1e-6f) ? std::abs(1.f / dir.z) : 1e30f;
+    glm::vec3 adir = glm::abs(dir);
+    float tdx = (adir.x > 1e-6f) ? glm::abs(1.f / dir.x) : 1e30f;
+    float tdy = (adir.y > 1e-6f) ? glm::abs(1.f / dir.y) : 1e30f;
+    float tdz = (adir.z > 1e-6f) ? glm::abs(1.f / dir.z) : 1e30f;
 
     float tx = (sx > 0) ? ((ix + 1) - origin.x) * tdx : (origin.x - ix) * tdx;
     float ty = (sy > 0) ? ((iy + 1) - origin.y) * tdy : (origin.y - iy) * tdy;
@@ -275,9 +275,8 @@ void Engine::run() {
         impl_->player.camera().getProjMatrix(proj4x4, aspect);
 
         // Sky view = rotation only (strip translation to keep sky fixed around camera)
-        glm::mat4 view, proj;
-        std::memcpy(glm::value_ptr(view), view4x4, 64);
-        std::memcpy(glm::value_ptr(proj), proj4x4, 64);
+        glm::mat4 view = glm::make_mat4(view4x4);
+        glm::mat4 proj = glm::make_mat4(proj4x4);
         glm::mat4 sky_view = glm::mat4(glm::mat3(view));
         float sky_view4x4[16];
         std::memcpy(sky_view4x4, glm::value_ptr(sky_view), 64);

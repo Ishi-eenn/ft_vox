@@ -312,9 +312,8 @@ static glm::mat4 buildMVP(const Chunk* chunk,
             static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)
         )
     );
-    glm::mat4 view, proj;
-    std::memcpy(glm::value_ptr(view), view4x4, 16 * sizeof(float));
-    std::memcpy(glm::value_ptr(proj), proj4x4, 16 * sizeof(float));
+    glm::mat4 view = glm::make_mat4(view4x4);
+    glm::mat4 proj = glm::make_mat4(proj4x4);
     return proj * view * model;
 }
 

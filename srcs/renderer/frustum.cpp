@@ -1,5 +1,5 @@
 #include "frustum.hpp"
-#include <cmath>
+#include <glm/glm.hpp>
 
 // ---------------------------------------------------------------------------
 // extractFromVP — Gribb / Hartmann fast frustum extraction
@@ -50,7 +50,7 @@ void Frustum::extractFromVP(const glm::mat4& m) {
 
     // Normalize each plane by the length of its xyz normal
     for (auto& p : planes_) {
-        float len = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+        float len = glm::length(glm::vec3(p));
         if (len > 0.0f) {
             p /= len;
         }
