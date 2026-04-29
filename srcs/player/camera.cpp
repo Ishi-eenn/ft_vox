@@ -3,11 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <cmath>
 #include <algorithm>
-
-// Degrees-to-radians helper
-static float toRad(float deg) { return deg * 3.14159265358979f / 180.0f; }
 
 Camera::Camera() { updateVectors(); }
 
@@ -23,16 +19,16 @@ void Camera::setYaw(float yaw) {
 }
 
 void Camera::setPitch(float pitch) {
-    pitch_ = std::clamp(pitch, -89.0f, 89.0f);
+    pitch_ = glm::clamp(pitch, -89.0f, 89.0f);
     updateVectors();
 }
 
 void Camera::updateVectors() {
-    float yr = toRad(yaw_);
-    float pr = toRad(pitch_);
-    front_.x = std::cos(yr) * std::cos(pr);
-    front_.y = std::sin(pr);
-    front_.z = std::sin(yr) * std::cos(pr);
+    float yr = glm::radians(yaw_);
+    float pr = glm::radians(pitch_);
+    front_.x = glm::cos(yr) * glm::cos(pr);
+    front_.y = glm::sin(pr);
+    front_.z = glm::sin(yr) * glm::cos(pr);
     front_   = glm::normalize(front_);
     right_   = glm::normalize(glm::cross(front_, glm::vec3(0,1,0)));
     up_      = glm::normalize(glm::cross(right_, front_));
@@ -43,7 +39,7 @@ glm::mat4 Camera::viewMatrix() const {
 }
 
 glm::mat4 Camera::projMatrix() const {
-    return glm::perspective(toRad(FOV_DEGREES), aspect_, NEAR_PLANE, FAR_PLANE);
+    return glm::perspective(glm::radians(FOV_DEGREES), aspect_, NEAR_PLANE, FAR_PLANE);
 }
 
 void Camera::getViewMatrix(float out4x4[16]) const {
@@ -52,7 +48,7 @@ void Camera::getViewMatrix(float out4x4[16]) const {
 }
 
 void Camera::getProjMatrix(float out4x4[16], float aspect) const {
-    glm::mat4 m = glm::perspective(toRad(FOV_DEGREES), aspect, NEAR_PLANE, FAR_PLANE);
+    glm::mat4 m = glm::perspective(glm::radians(FOV_DEGREES), aspect, NEAR_PLANE, FAR_PLANE);
     std::copy(glm::value_ptr(m), glm::value_ptr(m) + 16, out4x4);
 }
 

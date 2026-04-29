@@ -108,7 +108,8 @@ void Player::update(float dt,
     glm::vec3 hright = glm::normalize(glm::vec3(right.x, 0.0f, right.z));
 
     // Detect water at eye level (camera pos = eye pos)
-    in_water_ = isWater((int)std::floor(pos.x), (int)std::floor(pos.y), (int)std::floor(pos.z));
+    glm::ivec3 ipos = glm::ivec3(glm::floor(pos));
+    in_water_ = isWater(ipos.x, ipos.y, ipos.z);
 
     if (fly_mode_) {
         // ── Creative flight: no gravity, no collision ─────────────────────────
@@ -136,10 +137,8 @@ void Player::update(float dt,
 
         if (input_.isHeld(GLFW_KEY_SPACE)) {
             // At the water surface (block above eye is not water): jump out with full velocity
-            int eye_x = (int)std::floor(pos.x);
-            int eye_y = (int)std::floor(pos.y);
-            int eye_z = (int)std::floor(pos.z);
-            bool at_surface = !isWater(eye_x, eye_y + 1, eye_z);
+            glm::ivec3 eye = glm::ivec3(glm::floor(pos));
+            bool at_surface = !isWater(eye.x, eye.y + 1, eye.z);
             velocity_y_ = at_surface ? JUMP_VELOCITY : WATER_SWIM_SPEED;
         } else if (input_.isHeld(GLFW_KEY_LEFT_CONTROL)) {
             velocity_y_ = -WATER_SWIM_SPEED;
