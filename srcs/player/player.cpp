@@ -4,10 +4,16 @@
 
 // ─── Tuning constants ─────────────────────────────────────────────────────────
 static constexpr float SENSITIVITY       = 0.1f;
-static constexpr float GRAVITY           = 28.0f;   // blocks/s²  (Minecraft ≈ 20-28)
-static constexpr float JUMP_VELOCITY     = 9.0f;    // blocks/s   (gives ~1.25 block jump)
-static constexpr float TERMINAL_VELOCITY = -50.0f;  // blocks/s
-static constexpr float DBL_TAP_WINDOW    = 0.30f;   // seconds for double-tap detection
+static constexpr float GRAVITY           = 28.0f;
+static constexpr float JUMP_VELOCITY     = 9.0f;
+static constexpr float TERMINAL_VELOCITY = -50.0f;
+static constexpr float DBL_TAP_WINDOW    = 0.30f;
+
+// Water physics
+static constexpr float WATER_GRAVITY      = 6.0f;   // gentle sinking force
+static constexpr float WATER_TERMINAL_VEL = -3.0f;  // slow sink cap
+static constexpr float WATER_SWIM_SPEED   = 4.5f;   // Space / Ctrl vertical swim speed
+static constexpr float WATER_SPEED_FACTOR = 0.5f;   // horizontal speed multiplier
 
 // ─── Player AABB ──────────────────────────────────────────────────────────────
 // Minecraft standard: 0.6 wide × 1.8 tall, eyes at 1.62 from feet.
@@ -47,7 +53,9 @@ bool Player::overlapsAny(float px, float py, float pz,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-void Player::update(float dt, const std::function<bool(int,int,int)>& isSolid) {
+void Player::update(float dt,
+                    const std::function<bool(int,int,int)>& isSolid,
+                    const std::function<bool(int,int,int)>& isWater) {
     input_.newFrame();
     glfwPollEvents();
 
@@ -99,6 +107,9 @@ void Player::update(float dt, const std::function<bool(int,int,int)>& isSolid) {
     glm::vec3 hfront = glm::normalize(glm::vec3(front.x, 0.0f, front.z));
     glm::vec3 hright = glm::normalize(glm::vec3(right.x, 0.0f, right.z));
 
+    // Detect water at eye level (camera pos = eye pos)
+    in_water_ = isWater((int)std::floor(pos.x), (int)std::floor(pos.y), (int)std::floor(pos.z));
+
     if (fly_mode_) {
         // ── Creative flight: no gravity, no collision ─────────────────────────
         if (input_.isHeld(GLFW_KEY_W)) pos += hfront * speed * dt;
@@ -114,9 +125,54 @@ void Player::update(float dt, const std::function<bool(int,int,int)>& isSolid) {
         return;
     }
 
+    if (in_water_) {
+        // ── Underwater: buoyancy + swim controls ──────────────────────────────
+        float wsp = speed * WATER_SPEED_FACTOR;
+        glm::vec3 dp(0.0f);
+        if (input_.isHeld(GLFW_KEY_W)) dp += hfront * wsp * dt;
+        if (input_.isHeld(GLFW_KEY_S)) dp -= hfront * wsp * dt;
+        if (input_.isHeld(GLFW_KEY_D)) dp += hright * wsp * dt;
+        if (input_.isHeld(GLFW_KEY_A)) dp -= hright * wsp * dt;
+
+        if (input_.isHeld(GLFW_KEY_SPACE)) {
+            // At the water surface (block above eye is not water): jump out with full velocity
+            int eye_x = (int)std::floor(pos.x);
+            int eye_y = (int)std::floor(pos.y);
+            int eye_z = (int)std::floor(pos.z);
+            bool at_surface = !isWater(eye_x, eye_y + 1, eye_z);
+            velocity_y_ = at_surface ? JUMP_VELOCITY : WATER_SWIM_SPEED;
+        } else if (input_.isHeld(GLFW_KEY_LEFT_CONTROL)) {
+            velocity_y_ = -WATER_SWIM_SPEED;
+        } else {
+            velocity_y_ -= WATER_GRAVITY * dt;
+            if (velocity_y_ < WATER_TERMINAL_VEL) velocity_y_ = WATER_TERMINAL_VEL;
+        }
+        on_ground_ = false;
+
+        if (dp.x != 0.0f) {
+            float nx = pos.x + dp.x;
+            if (!overlapsAny(nx, pos.y, pos.z, isSolid)) pos.x = nx;
+        }
+        if (dp.z != 0.0f) {
+            float nz = pos.z + dp.z;
+            if (!overlapsAny(pos.x, pos.y, nz, isSolid)) pos.z = nz;
+        }
+        {
+            float ny = pos.y + velocity_y_ * dt;
+            if (!overlapsAny(pos.x, ny, pos.z, isSolid)) {
+                pos.y = ny;
+            } else {
+                if (velocity_y_ < 0.0f) on_ground_ = true;
+                velocity_y_ = 0.0f;
+            }
+        }
+
+        camera_.setPosition(pos.x, pos.y, pos.z);
+        return;
+    }
+
     // ── Normal mode: gravity + AABB collision ─────────────────────────────────
 
-    // Desired horizontal displacement this frame
     glm::vec3 dp(0.0f);
     if (input_.isHeld(GLFW_KEY_W)) dp += hfront * speed * dt;
     if (input_.isHeld(GLFW_KEY_S)) dp -= hfront * speed * dt;
@@ -154,7 +210,6 @@ void Player::update(float dt, const std::function<bool(int,int,int)>& isSolid) {
             pos.y      = ny;
             on_ground_ = false;
         } else {
-            // Landed (velocity_y_ < 0) or hit ceiling (velocity_y_ > 0)
             if (velocity_y_ < 0.0f) on_ground_ = true;
             velocity_y_ = 0.0f;
         }

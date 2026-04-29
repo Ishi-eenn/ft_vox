@@ -15,6 +15,7 @@ public:
     void setInt(const char* name, int val) const;
     void setFloat(const char* name, float val) const;
     void setVec3(const char* name, float x, float y, float z) const;
+    void setVec4(const char* name, float x, float y, float z, float w) const;
 
     uint32_t id() const { return program_; }
 

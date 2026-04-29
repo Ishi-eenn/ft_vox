@@ -21,6 +21,7 @@ public:
     void drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4);
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
     void drawHud(int fps);
+    void drawUnderwaterOverlay();
     void endFrame() override;
     void onResize(int w, int h) override;
 
@@ -41,6 +42,8 @@ private:
     Frustum      frustum_;
     int          width_ = 1280, height_ = 720;
 
-    uint32_t     hud_vao_ = 0;
-    uint32_t     hud_vbo_ = 0;
+    uint32_t     hud_vao_     = 0;
+    uint32_t     hud_vbo_     = 0;
+    uint32_t     overlay_vao_ = 0;
+    uint32_t     overlay_vbo_ = 0;
 };

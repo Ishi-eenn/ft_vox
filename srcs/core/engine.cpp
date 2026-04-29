@@ -211,12 +211,14 @@ void Engine::run() {
         }
 
         // ── Input + movement ──────────────────────────────────────────────────
-        // isSolid: block query callback used by Player for AABB collision.
         auto isSolid = [&](int x, int y, int z) {
             BlockType t = impl_->world.getWorldBlock(x, y, z);
             return t != BlockType::Air && t != BlockType::Water;
         };
-        impl_->player.update(dt, isSolid);
+        auto isWater = [&](int x, int y, int z) {
+            return impl_->world.getWorldBlock(x, y, z) == BlockType::Water;
+        };
+        impl_->player.update(dt, isSolid, isWater);
         if (impl_->player.shouldClose()) break;
 
         // ── Window resize ─────────────────────────────────────────────────────
@@ -301,6 +303,8 @@ void Engine::run() {
             impl_->renderer.drawChunkWater(c, view4x4, proj4x4);
         }
 
+        if (impl_->player.isInWater())
+            impl_->renderer.drawUnderwaterOverlay();
         impl_->renderer.drawHud(fps_display);
         impl_->renderer.endFrame();
         ++frame_;
