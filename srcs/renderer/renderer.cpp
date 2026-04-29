@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <iostream>
 #include <cstring>
+#include <cmath>
 
 // ---------------------------------------------------------------------------
 // Constructor / Destructor
@@ -295,7 +296,9 @@ void Renderer::destroyChunkMesh(Chunk* chunk) {
 // beginFrame()
 // ---------------------------------------------------------------------------
 void Renderer::beginFrame() {
-    glClearColor(0.3f, 0.5f, 0.9f, 1.0f);
+    // Match the clear colour to the sky horizon so there's no seam if chunks are
+    // missing at the edges of the view.
+    glClearColor(sky_horizon_[0], sky_horizon_[1], sky_horizon_[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
@@ -320,6 +323,16 @@ static glm::mat4 buildMVP(const Chunk* chunk,
 // ---------------------------------------------------------------------------
 // drawChunk() — opaque pass only
 // ---------------------------------------------------------------------------
+// Set the lighting uniforms shared by both the opaque and water passes.
+// Called once before the first drawChunk each frame.
+static void setChunkLightingUniforms(Shader& shader,
+                                     const float sun_dir[3],
+                                     float ambient, float sun_strength) {
+    shader.setVec3 ("uSunDir",      sun_dir[0],   sun_dir[1],   sun_dir[2]);
+    shader.setFloat("uAmbient",     ambient);
+    shader.setFloat("uSunStrength", sun_strength);
+}
+
 void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
     if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
 
@@ -327,6 +340,7 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+    setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
 
@@ -348,6 +362,7 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+    setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
 
@@ -371,6 +386,14 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
 // drawSkybox()
 // ---------------------------------------------------------------------------
 void Renderer::drawSkybox(const float* view3x3, const float* proj4x4) {
+    // Set sky uniforms before the draw call (Skybox::draw will call use() again,
+    // but that's the same program so the uniforms are already uploaded).
+    sky_shader_.use();
+    sky_shader_.setVec3("uSkyZenith",   sky_zenith_[0],  sky_zenith_[1],  sky_zenith_[2]);
+    sky_shader_.setVec3("uSkyHorizon",  sky_horizon_[0], sky_horizon_[1], sky_horizon_[2]);
+    sky_shader_.setVec3("uGroundColor", sky_ground_[0],  sky_ground_[1],  sky_ground_[2]);
+    sky_shader_.setVec3("uSunDir",      sun_dir_[0],     sun_dir_[1],     sun_dir_[2]);
+    sky_shader_.setVec3("uSunColor",    sun_color_[0],   sun_color_[1],   sun_color_[2]);
     skybox_.draw(view3x3, proj4x4, sky_shader_);
 }
 
@@ -388,4 +411,89 @@ void Renderer::onResize(int w, int h) {
     glViewport(0, 0, w, h);
     width_  = w;
     height_ = h;
+}
+
+// ---------------------------------------------------------------------------
+// setTimeOfDay()
+// t ∈ [0, 1):  0.0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
+// ---------------------------------------------------------------------------
+void Renderer::setTimeOfDay(float t) {
+    // ── Sun direction ─────────────────────────────────────────────────────────
+    // angle = 0 at midnight; sun peaks overhead (y=1) at t=0.5 (noon).
+    // X axis = east–west; slight Z tilt for visual interest (northern hemisphere).
+    const float angle = 2.0f * static_cast<float>(M_PI) * t;
+    const float raw_x = std::sinf(angle);
+    const float raw_y = -std::cosf(angle);
+    const float raw_z = 0.30f;
+    const float len   = std::sqrtf(raw_x*raw_x + raw_y*raw_y + raw_z*raw_z);
+    sun_dir_[0] = raw_x / len;
+    sun_dir_[1] = raw_y / len;
+    sun_dir_[2] = raw_z / len;
+
+    const float elev = sun_dir_[1];  // -1 = below horizon, +1 = overhead
+
+    // Helper: linear interpolation between two 3-component colours.
+    auto lerpCol = [](float* dst,
+                      const float a[3], const float b[3], float f) {
+        for (int i = 0; i < 3; ++i)
+            dst[i] = a[i] + (b[i] - a[i]) * f;
+    };
+    auto clamp01 = [](float x) { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); };
+
+    // ── Reference sky colours ─────────────────────────────────────────────────
+    static const float kNightZenith [3] = {0.01f, 0.02f, 0.08f};
+    static const float kNightHorizon[3] = {0.02f, 0.04f, 0.12f};
+    static const float kNightGround [3] = {0.01f, 0.01f, 0.03f};
+
+    static const float kDawnZenith  [3] = {0.12f, 0.22f, 0.52f};
+    static const float kDawnHorizon [3] = {0.90f, 0.40f, 0.10f};
+    static const float kDawnGround  [3] = {0.20f, 0.15f, 0.10f};
+
+    static const float kDayZenith   [3] = {0.08f, 0.25f, 0.65f};
+    static const float kDayHorizon  [3] = {0.55f, 0.72f, 0.90f};
+    static const float kDayGround   [3] = {0.35f, 0.30f, 0.25f};
+
+    static const float kSunColorDawn[3] = {1.00f, 0.60f, 0.20f};
+    static const float kSunColorDay [3] = {1.00f, 0.98f, 0.85f};
+    static const float kSunColorDusk[3] = {1.00f, 0.50f, 0.10f};
+
+    // ── Map elevation to blended sky colours ─────────────────────────────────
+    // Use sun elevation as the blend driver so colours track actual sun position:
+    //   elev ≤ -0.15  →  pure night
+    //   elev  ∈ [-0.15, 0.15]  →  dawn/dusk blend
+    //   elev ≥  0.15  →  day (deeper blue as elev → 1)
+    if (elev <= -0.15f) {
+        // Full night
+        for (int i = 0; i < 3; ++i) {
+            sky_zenith_ [i] = kNightZenith [i];
+            sky_horizon_[i] = kNightHorizon[i];
+            sky_ground_ [i] = kNightGround [i];
+            sun_color_  [i] = kSunColorDay [i];
+        }
+        ambient_      = 0.04f;
+        sun_strength_ = 0.0f;
+    } else if (elev < 0.15f) {
+        // Dawn / dusk transition
+        const float f = clamp01((elev + 0.15f) / 0.30f);  // 0=night, 1=day
+        lerpCol(sky_zenith_,  kNightZenith,  kDawnZenith,  f);
+        lerpCol(sky_horizon_, kNightHorizon, kDawnHorizon, f);
+        lerpCol(sky_ground_,  kNightGround,  kDawnGround,  f);
+        // Sun colour depends on whether we're rising (t < 0.5) or setting (t > 0.5)
+        const float* sunrise_col = (t < 0.5f) ? kSunColorDawn : kSunColorDusk;
+        lerpCol(sun_color_, kSunColorDay, sunrise_col, 1.0f - f);
+        ambient_      = 0.04f + 0.14f * f;
+        sun_strength_ = 0.30f * f;
+    } else {
+        // Daytime — sky deepens towards zenith as sun rises higher
+        const float day_f = clamp01((elev - 0.15f) / 0.85f);  // 0=low sun, 1=overhead
+        lerpCol(sky_zenith_,  kDawnZenith,  kDayZenith,  day_f);
+        lerpCol(sky_horizon_, kDawnHorizon, kDayHorizon, day_f);
+        lerpCol(sky_ground_,  kDawnGround,  kDayGround,  day_f);
+        lerpCol(sun_color_,   kSunColorDawn, kSunColorDay, day_f);
+        ambient_      = 0.18f + 0.14f * day_f;
+        sun_strength_ = 0.30f + 0.35f * day_f;
+    }
+
+    // Never let the sun contribute diffuse light when it is below the horizon
+    if (elev < 0.0f) sun_strength_ = 0.0f;
 }
