@@ -195,6 +195,9 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                 }
 
                 chunk.setBlock(x, y, z, t);
+                if (t == BlockType::Water) {
+                    chunk.setWaterLevel(x, y, z, 8);
+                }
             }
         }
     }

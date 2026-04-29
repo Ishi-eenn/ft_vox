@@ -15,7 +15,6 @@ void Player::update(float dt) {
     input_.newFrame();
     glfwPollEvents();
 
-    // ─── Fast mode toggle (Left Shift key) ────────────────────────────────
     bool f_down = input_.isHeld(GLFW_KEY_LEFT_SHIFT);
     if (f_down && !f_was_down_) fast_mode_ = !fast_mode_;
     f_was_down_ = f_down;

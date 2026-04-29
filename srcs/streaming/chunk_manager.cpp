@@ -4,6 +4,19 @@
 #include <cmath>
 #include <algorithm>
 
+static void rebuildModifiedBlock(int wx, int wz, ChunkManager& mgr) {
+    int cx = (int)std::floor((float)wx / CHUNK_SIZE_X);
+    int cz = (int)std::floor((float)wz / CHUNK_SIZE_Z);
+    int lx = wx - cx * CHUNK_SIZE_X;
+    int lz = wz - cz * CHUNK_SIZE_Z;
+
+    mgr.rebuildChunkAt({cx, cz});
+    if (lx == 0)               mgr.rebuildChunkAt({cx - 1, cz});
+    if (lx == CHUNK_SIZE_X-1)  mgr.rebuildChunkAt({cx + 1, cz});
+    if (lz == 0)               mgr.rebuildChunkAt({cx, cz - 1});
+    if (lz == CHUNK_SIZE_Z-1)  mgr.rebuildChunkAt({cx, cz + 1});
+}
+
 ChunkManager::ChunkManager(IWorld& world, IRenderer& renderer)
     : world_(world)
     , renderer_(renderer)
@@ -29,6 +42,15 @@ void ChunkManager::update(float playerX, float playerZ, uint64_t frame) {
     };
 
     loadRadius(center);
+    if (frame % 3 == 0) {
+        auto changed_water = world_.stepWater(
+            {center.x - RENDER_DISTANCE, center.z - RENDER_DISTANCE},
+            {center.x + RENDER_DISTANCE, center.z + RENDER_DISTANCE}
+        );
+        for (const WorldPos& pos : changed_water) {
+            rebuildModifiedBlock(pos.x, pos.z, *this);
+        }
+    }
     uploadPending(CHUNKS_PER_FRAME_GEN);
     evictIfOverBudget();
 

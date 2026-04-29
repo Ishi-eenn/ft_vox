@@ -268,8 +268,16 @@ void Engine::run() {
         impl_->renderer.drawSkybox(sky_view4x4, proj4x4);
 
         auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
+
+        // Pass 1: opaque geometry (writes to depth buffer)
         for (Chunk* c : visible) {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);
+        }
+
+        // Pass 2: transparent geometry (reads depth, does NOT write depth)
+        // This ensures terrain is always visible through water from any angle.
+        for (Chunk* c : visible) {
+            impl_->renderer.drawChunkWater(c, view4x4, proj4x4);
         }
 
         impl_->renderer.drawHud(fps_display);

@@ -189,11 +189,19 @@ void Renderer::uploadChunkMesh(Chunk* chunk) {
                  chunk->vertices.data(),
                  GL_STATIC_DRAW);
 
-    // Upload indices
+    // Pack opaque indices followed by water indices into one EBO.
+    // drawChunk draws [0, idx_count), drawChunkWater draws the tail.
+    const size_t n_opaque = chunk->indices.size();
+    const size_t n_water  = chunk->indices_water.size();
+    std::vector<uint32_t> all_indices;
+    all_indices.reserve(n_opaque + n_water);
+    all_indices.insert(all_indices.end(), chunk->indices.begin(),       chunk->indices.end());
+    all_indices.insert(all_indices.end(), chunk->indices_water.begin(), chunk->indices_water.end());
+
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, chunk->gpu.ebo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 static_cast<GLsizeiptr>(chunk->indices.size() * sizeof(uint32_t)),
-                 chunk->indices.data(),
+                 static_cast<GLsizeiptr>(all_indices.size() * sizeof(uint32_t)),
+                 all_indices.data(),
                  GL_STATIC_DRAW);
 
     // Vertex attribute layout — must match struct Vertex:
@@ -219,14 +227,17 @@ void Renderer::uploadChunkMesh(Chunk* chunk) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     // Note: do NOT unbind EBO while VAO is unbound — it was already recorded.
 
-    chunk->gpu.idx_count = static_cast<int32_t>(chunk->indices.size());
-    chunk->gpu.uploaded  = true;
+    chunk->gpu.idx_count       = static_cast<int32_t>(n_opaque);
+    chunk->gpu.idx_count_water = static_cast<int32_t>(n_water);
+    chunk->gpu.uploaded        = true;
 
     // Free CPU-side mesh data — it has been transferred to the GPU
     chunk->vertices.clear();
     chunk->vertices.shrink_to_fit();
     chunk->indices.clear();
     chunk->indices.shrink_to_fit();
+    chunk->indices_water.clear();
+    chunk->indices_water.shrink_to_fit();
 
     chunk->is_dirty = false;
 }
@@ -241,11 +252,12 @@ void Renderer::destroyChunkMesh(Chunk* chunk) {
     glDeleteBuffers(1, &chunk->gpu.vbo);
     glDeleteBuffers(1, &chunk->gpu.ebo);
 
-    chunk->gpu.vao       = 0;
-    chunk->gpu.vbo       = 0;
-    chunk->gpu.ebo       = 0;
-    chunk->gpu.idx_count = 0;
-    chunk->gpu.uploaded  = false;
+    chunk->gpu.vao             = 0;
+    chunk->gpu.vbo             = 0;
+    chunk->gpu.ebo             = 0;
+    chunk->gpu.idx_count       = 0;
+    chunk->gpu.idx_count_water = 0;
+    chunk->gpu.uploaded        = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,12 +269,10 @@ void Renderer::beginFrame() {
 }
 
 // ---------------------------------------------------------------------------
-// drawChunk()
+// buildMVP() — shared helper
 // ---------------------------------------------------------------------------
-void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
-    if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
-
-    // Build model matrix: translate to chunk world position
+static glm::mat4 buildMVP(const Chunk* chunk,
+                           const float* view4x4, const float* proj4x4) {
     glm::mat4 model = glm::translate(
         glm::mat4(1.0f),
         glm::vec3(
@@ -271,17 +281,22 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
             static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)
         )
     );
-
-    // Reconstruct view and proj matrices from raw float pointers
     glm::mat4 view, proj;
     std::memcpy(glm::value_ptr(view), view4x4, 16 * sizeof(float));
     std::memcpy(glm::value_ptr(proj), proj4x4, 16 * sizeof(float));
+    return proj * view * model;
+}
 
-    glm::mat4 mvp = proj * view * model;
+// ---------------------------------------------------------------------------
+// drawChunk() — opaque pass only
+// ---------------------------------------------------------------------------
+void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
+    if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
+
+    glm::mat4 mvp = buildMVP(chunk, view4x4, proj4x4);
 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
-
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
 
@@ -291,6 +306,35 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
                    GL_UNSIGNED_INT,
                    nullptr);
     glBindVertexArray(0);
+}
+
+// ---------------------------------------------------------------------------
+// drawChunkWater() — transparent pass (no depth writes so terrain shows through)
+// ---------------------------------------------------------------------------
+void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
+    if (!chunk->gpu.uploaded || chunk->gpu.idx_count_water == 0) return;
+
+    glm::mat4 mvp = buildMVP(chunk, view4x4, proj4x4);
+
+    chunk_shader_.use();
+    chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+    atlas_.bind(0);
+    chunk_shader_.setInt("uAtlas", 0);
+
+    // Disable depth writes so transparent water doesn't occlude geometry behind it.
+    // Depth test still reads, so water is occluded by closer solid surfaces.
+    glDepthMask(GL_FALSE);
+
+    glBindVertexArray(chunk->gpu.vao);
+    const GLintptr water_offset =
+        static_cast<GLintptr>(chunk->gpu.idx_count) * static_cast<GLintptr>(sizeof(uint32_t));
+    glDrawElements(GL_TRIANGLES,
+                   static_cast<GLsizei>(chunk->gpu.idx_count_water),
+                   GL_UNSIGNED_INT,
+                   reinterpret_cast<const void*>(water_offset));
+    glBindVertexArray(0);
+
+    glDepthMask(GL_TRUE);
 }
 
 // ---------------------------------------------------------------------------

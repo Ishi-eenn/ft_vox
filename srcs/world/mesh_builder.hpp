@@ -18,8 +18,22 @@ public:
 
 private:
     static bool isSolid(BlockType t) { return t != BlockType::Air; }
+    static bool isWater(BlockType t) { return t == BlockType::Water; }
     static BlockType getNeighborBlock(
         int nx, int ny, int nz,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
+    static uint8_t getNeighborWaterLevel(
+        int nx, int ny, int nz,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
+    static float getWaterSurfaceHeight(
+        int x, int y, int z,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
+    static void computeWaterTopHeights(
+        float out[4],
+        int x, int y, int z,
         const Chunk& chunk,
         const ChunkNeighbors& neighbors);
 
@@ -28,5 +42,7 @@ private:
         std::vector<uint32_t>& indices,
         int x, int y, int z,
         Face face,
-        BlockType type);
+        BlockType type,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
 };

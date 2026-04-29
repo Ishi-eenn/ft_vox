@@ -42,6 +42,21 @@ struct ChunkPosHash {
     }
 };
 
+struct WorldPos {
+    int32_t x, y, z;
+    bool operator==(const WorldPos& o) const noexcept {
+        return x == o.x && y == o.y && z == o.z;
+    }
+};
+
+struct WorldPosHash {
+    size_t operator()(const WorldPos& p) const noexcept {
+        uint64_t a = ((uint64_t)(uint32_t)p.x << 32) | (uint32_t)p.y;
+        uint64_t b = ((uint64_t)(uint32_t)p.z << 32) ^ a;
+        return std::hash<uint64_t>()(b);
+    }
+};
+
 // ─── Vertex (interleaved: pos 12B, uv 8B, normal 12B = 32B) ─────────────────
 struct Vertex {
     float x, y, z;
@@ -67,23 +82,26 @@ constexpr int   SEA_LEVEL            = 42;    // y at which water surface sits
 
 // ─── Chunk data ───────────────────────────────────────────────────────────────
 struct ChunkGpuMesh {
-    uint32_t vao       = 0;
-    uint32_t vbo       = 0;
-    uint32_t ebo       = 0;
-    int32_t  idx_count = 0;
-    bool     uploaded  = false;
+    uint32_t vao             = 0;
+    uint32_t vbo             = 0;
+    uint32_t ebo             = 0;        // opaque + water indices (packed)
+    int32_t  idx_count       = 0;        // opaque index count
+    int32_t  idx_count_water = 0;        // water index count (after opaque in EBO)
+    bool     uploaded        = false;
 };
 
 struct Chunk {
     // Block data: [x][y][z]
     BlockType blocks[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
+    uint8_t   water_levels[CHUNK_SIZE_X][CHUNK_SIZE_Y][CHUNK_SIZE_Z];
     ChunkPos  pos;
     bool      is_generated = false;
     bool      is_dirty     = true;
 
     // CPU mesh (built by MeshBuilder, consumed by Renderer upload)
     std::vector<Vertex>   vertices;
-    std::vector<uint32_t> indices;
+    std::vector<uint32_t> indices;        // opaque faces
+    std::vector<uint32_t> indices_water;  // transparent (water) faces
 
     // GPU mesh (owned by Renderer)
     ChunkGpuMesh gpu;
@@ -91,7 +109,10 @@ struct Chunk {
     // LRU timestamp
     uint64_t last_access_frame = 0;
 
-    Chunk() { std::memset(blocks, 0, sizeof(blocks)); }
+    Chunk() {
+        std::memset(blocks, 0, sizeof(blocks));
+        std::memset(water_levels, 0, sizeof(water_levels));
+    }
 
     inline BlockType getBlock(int x, int y, int z) const noexcept {
         if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
@@ -102,5 +123,16 @@ struct Chunk {
         if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
             return;
         blocks[x][y][z] = t;
+        if (t != BlockType::Water) water_levels[x][y][z] = 0;
+    }
+    inline uint8_t getWaterLevel(int x, int y, int z) const noexcept {
+        if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
+            return 0;
+        return water_levels[x][y][z];
+    }
+    inline void setWaterLevel(int x, int y, int z, uint8_t level) noexcept {
+        if (x < 0 || x >= CHUNK_SIZE_X || y < 0 || y >= CHUNK_SIZE_Y || z < 0 || z >= CHUNK_SIZE_Z)
+            return;
+        water_levels[x][y][z] = level;
     }
 };

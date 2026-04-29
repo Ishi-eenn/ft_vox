@@ -26,11 +26,12 @@ static inline int clamp255(int v) {
 
 static inline void setPixel(uint8_t* buf, int atlas_w,
                              int ox, int oy, int px, int py,
-                             int r, int g, int b) {
-    int idx = ((oy + py) * atlas_w + (ox + px)) * 3;
+                             int r, int g, int b, int a = 255) {
+    int idx = ((oy + py) * atlas_w + (ox + px)) * 4;
     buf[idx + 0] = (uint8_t)clamp255(r);
     buf[idx + 1] = (uint8_t)clamp255(g);
     buf[idx + 2] = (uint8_t)clamp255(b);
+    buf[idx + 3] = (uint8_t)clamp255(a);
 }
 
 // ─── Dirt ────────────────────────────────────────────────────────────────────
@@ -193,13 +194,14 @@ static void fillWater(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
             int r = 32  + (n1 - 128) * 12 / 128;
             int g = 96  + (n1 - 128) * 18 / 128;
             int b = 188 + (n1 - 128) *  8 / 128;
+            int a = 168;
 
             // Ripple highlights (~8%)
             if (n2 > 232) { r += 18; g += 28; b += 14; }
             // Dark shadow patches (~5%)
             if (n2 < 12)  { r -= 12; g -= 18; b -= 20; }
 
-            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b, a);
         }
     }
 }
@@ -299,13 +301,13 @@ static void fillGrassSide(uint8_t* buf, int atlas_w, int tile_col, int tile_row)
 
 // ─── Solid color (for Air / unused tiles) ────────────────────────────────────
 static void fillSolid(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
-                       uint8_t r, uint8_t g, uint8_t b) {
+                       uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
     const int tw = ATLAS_TILE_SIZE;
     const int ox = tile_col * tw;
     const int oy = tile_row * tw;
     for (int py = 0; py < tw; ++py)
         for (int px = 0; px < tw; ++px)
-            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b, a);
 }
 
 } // anonymous namespace
@@ -317,7 +319,7 @@ bool TextureAtlas::generate() {
     const int atlas_w = ATLAS_COLS * ATLAS_TILE_SIZE;  // 128
     const int atlas_h = rows_      * ATLAS_TILE_SIZE;  // 64
 
-    uint8_t pixels[128 * 64 * 3];
+    uint8_t pixels[128 * 64 * 4];
     std::memset(pixels, 0, sizeof(pixels));
 
     // col index matches (int)BlockType
@@ -335,9 +337,9 @@ bool TextureAtlas::generate() {
     glGenTextures(1, &tex_id_);
     glBindTexture(GL_TEXTURE_2D, tex_id_);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
                  atlas_w, atlas_h,
-                 0, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
