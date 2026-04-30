@@ -524,10 +524,10 @@ void Renderer::setTimeOfDay(float t) {
     // 太陽方向ベクトルを計算する
     // angle=0 で深夜（太陽は真下）、angle=π で正午（太陽は真上）
     const float angle = 2.0f * static_cast<float>(M_PI) * t;
-    const float raw_x = std::sinf(angle);
-    const float raw_y = -std::cosf(angle);
+    const float raw_x = std::sin(angle);
+    const float raw_y = -std::cos(angle);
     const float raw_z = 0.30f;  // 北半球の太陽の傾き（視覚的な面白さのため）
-    const float len   = std::sqrtf(raw_x*raw_x + raw_y*raw_y + raw_z*raw_z);
+    const float len   = std::sqrt(raw_x*raw_x + raw_y*raw_y + raw_z*raw_z);
     sun_dir_[0] = raw_x / len;
     sun_dir_[1] = raw_y / len;
     sun_dir_[2] = raw_z / len;
