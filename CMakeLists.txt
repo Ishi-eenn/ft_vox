@@ -76,6 +76,7 @@ add_executable(
   srcs/renderer/frustum.cpp
   srcs/renderer/texture_atlas.cpp
   srcs/renderer/skybox.cpp
+  srcs/renderer/title_screen.cpp
   srcs/renderer/renderer.cpp
 )
 

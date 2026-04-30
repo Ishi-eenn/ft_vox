@@ -35,6 +35,7 @@ Renderer::Renderer() = default;
 
 Renderer::~Renderer() {
     // シェーダープログラム・GPU バッファをすべて解放する
+    title_screen_.destroy();
     chunk_shader_.destroy();
     sky_shader_.destroy();
     hud_shader_.destroy();
@@ -98,7 +99,17 @@ bool Renderer::init(GLFWwindow* window) {
     // ── HUD（照準＋FPS表示）の初期化 ──────────────────────────────────────────
     initHud();
 
+    // ── タイトル画面の初期化 ────────────────────────────────────────────────
+    title_screen_.init(atlas_, chunk_shader_, hud_shader_);
+
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawTitleScreen() — タイトル画面を描画し、SPACEが押されたら true を返す
+// ─────────────────────────────────────────────────────────────────────────────
+bool Renderer::drawTitleScreen(float dt) {
+    return title_screen_.render(dt, window_, width_, height_);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
