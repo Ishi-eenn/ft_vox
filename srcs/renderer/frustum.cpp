@@ -1,54 +1,69 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// frustum.cpp — フラスタムカリング（視錐台による描画省略）
+//
+// 【フラスタムとは？】
+//   カメラの視野を表す「切り頭四角錐」（視錐台）のこと。
+//   カメラから見える範囲は、近クリップ面〜遠クリップ面の間の台形状の立体で表せる。
+//   この立体を6枚の平面（左・右・上・下・近・遠）で定義する。
+//
+// 【なぜカリングが必要か？】
+//   画面に映っていないチャンクを描画しても無駄。
+//   フラスタムの外にあるチャンクをスキップすることでGPUの負荷を大幅に下げられる。
+//
+// 【Gribb/Hartmann 法】
+//   View-Projection 行列から直接6平面を計算する高速な手法。
+//   行列の各行を足し引きするだけで平面の係数が得られる。
+// ─────────────────────────────────────────────────────────────────────────────
 #include "frustum.hpp"
 #include <glm/glm.hpp>
 
-// ---------------------------------------------------------------------------
-// extractFromVP — Gribb / Hartmann fast frustum extraction
+// ─────────────────────────────────────────────────────────────────────────────
+// extractFromVP() — View-Projection 行列から視錐台の6平面を取り出す
 //
-// GLM uses column-major storage: m[col][row]
-// For a combined view-projection matrix VP, the clip planes are:
+// 【平面の表現】
+//   各平面は ax + by + cz + d = 0 で表す（vec4 = (a, b, c, d)）。
+//   法線ベクトル (a, b, c) が視錐台の内側を向くようにする。
 //
-//   Left  : row3 + row0   =>  VP[0][3]+VP[0][0], VP[1][3]+VP[1][0], ...
-//   Right : row3 - row0
-//   Bottom: row3 + row1
-//   Top   : row3 - row1
-//   Near  : row3 + row2
-//   Far   : row3 - row2
+// 【GLM の列優先行列について】
+//   GLM の mat4 は列優先（Column-Major）で格納されている。
+//   m[col][row] でアクセスする（行と列の順が逆なので注意）。
 //
-// where VP[c][r] means column c, row r.
-// ---------------------------------------------------------------------------
+// 行列の行 r の成分は: m[0][r], m[1][r], m[2][r], m[3][r]
+// ─────────────────────────────────────────────────────────────────────────────
 void Frustum::extractFromVP(const glm::mat4& m) {
-    // Left
+    // 左平面: 行3 + 行0
     planes_[0] = glm::vec4(m[0][3] + m[0][0],
                             m[1][3] + m[1][0],
                             m[2][3] + m[2][0],
                             m[3][3] + m[3][0]);
-    // Right
+    // 右平面: 行3 - 行0
     planes_[1] = glm::vec4(m[0][3] - m[0][0],
                             m[1][3] - m[1][0],
                             m[2][3] - m[2][0],
                             m[3][3] - m[3][0]);
-    // Bottom
+    // 下平面: 行3 + 行1
     planes_[2] = glm::vec4(m[0][3] + m[0][1],
                             m[1][3] + m[1][1],
                             m[2][3] + m[2][1],
                             m[3][3] + m[3][1]);
-    // Top
+    // 上平面: 行3 - 行1
     planes_[3] = glm::vec4(m[0][3] - m[0][1],
                             m[1][3] - m[1][1],
                             m[2][3] - m[2][1],
                             m[3][3] - m[3][1]);
-    // Near
+    // 近平面: 行3 + 行2
     planes_[4] = glm::vec4(m[0][3] + m[0][2],
                             m[1][3] + m[1][2],
                             m[2][3] + m[2][2],
                             m[3][3] + m[3][2]);
-    // Far
+    // 遠平面: 行3 - 行2
     planes_[5] = glm::vec4(m[0][3] - m[0][2],
                             m[1][3] - m[1][2],
                             m[2][3] - m[2][2],
                             m[3][3] - m[3][2]);
 
-    // Normalize each plane by the length of its xyz normal
+    // 各平面の法線ベクトル(a,b,c)の長さで割って「単位法線」に正規化する。
+    // 正規化することで、後の符号付き距離計算が正しいブロック単位になる。
     for (auto& p : planes_) {
         float len = glm::length(glm::vec3(p));
         if (len > 0.0f) {
@@ -57,25 +72,32 @@ void Frustum::extractFromVP(const glm::mat4& m) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// isAABBVisible — for each plane, test the "positive vertex" of the AABB.
-// The positive vertex is the corner of the box that lies farthest in the
-// direction of the plane's outward normal.  If even that corner is on the
-// negative side of the plane, the entire box is outside the frustum.
-// ---------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────────
+// isAABBVisible() — 軸平行境界ボックス（AABB）が視錐台の中に見えるか判定
+//
+// 【判定方法】
+//   6平面それぞれについて、AABBの「最も外側の頂点（positive vertex）」を調べる。
+//   positive vertex = 平面の法線方向にAABBの中で最も遠い角。
+//   もしこの頂点が平面の外側（負の側）にあれば、AABBは完全に外→描画不要。
+//   全平面で内側なら描画が必要。
+//
+//   これは O(6) の非常に高速な判定で、毎フレーム全チャンクに適用できる。
+// ─────────────────────────────────────────────────────────────────────────────
 bool Frustum::isAABBVisible(const AABB& box) const {
     for (const auto& p : planes_) {
-        // Choose the AABB corner that maximises dot(corner, normal)
+        // 法線(p.x, p.y, p.z) の各成分の符号に応じて、
+        // AABBの8頂点のうち「法線方向に最も遠い角」を選ぶ
         glm::vec3 positive(
             (p.x >= 0.0f) ? box.max.x : box.min.x,
             (p.y >= 0.0f) ? box.max.y : box.min.y,
             (p.z >= 0.0f) ? box.max.z : box.min.z
         );
 
+        // 符号付き距離 = 内積 + d  （正なら平面の内側、負なら外側）
         float dist = p.x * positive.x + p.y * positive.y + p.z * positive.z + p.w;
         if (dist < 0.0f) {
-            return false;   // fully outside this plane
+            return false;  // この平面に対して完全に外側 → カリング
         }
     }
-    return true;
+    return true;  // 全平面で内側 or 交差している → 描画する
 }
