@@ -41,3 +41,10 @@ make run
 # ビルド＆起動（シード指定）
 make run 12345
 ```
+
+## FAQ
+Cntlで下降できない場合は、以下のコマンドでアクセシビリティのCtrl+マウスでカーソル位置表示を無効化してください。
+```
+# アクセシビリティのCtrl+マウスでカーソル位置表示を無効化
+gsettings set org.gnome.desktop.interface locate-pointer false
+```
