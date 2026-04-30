@@ -21,7 +21,7 @@ public:
     void drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) override;
     void drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4);
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
-    void drawHud(int fps);
+    void drawHud(int fps, int px, int py, int pz);
     void drawUnderwaterOverlay();
     // Returns true when the player presses SPACE to start the game
     bool drawTitleScreen(float dt);
@@ -39,6 +39,8 @@ private:
     void appendLine(float* verts, int& count, float x0, float y0, float x1, float y1) const;
     void appendDigit(float* verts, int& count, int digit, float left, float top, float w, float h) const;
     void appendNumber(float* verts, int& count, int value, float right, float top, float w, float h, float gap) const;
+    void appendLetter(float* verts, int& count, char letter, float left, float top, float w, float h) const;
+    void appendSignedNumberLeft(float* verts, int& count, int value, float left, float top, float w, float h, float gap) const;
 
     GLFWwindow*  window_  = nullptr;
     Shader       chunk_shader_;

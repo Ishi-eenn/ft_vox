@@ -17,6 +17,7 @@
 #include <cmath>
 
 // ─── 調整定数 ────────────────────────────────────────────────────────────────
+static constexpr float WORLD_BOTTOM      = -200.0f; // Y座標の下限（これより低くは行けない）
 static constexpr float SENSITIVITY       = 0.1f;    // マウス感度（度/ピクセル）
 static constexpr float GRAVITY           = 28.0f;   // 重力加速度（ブロック/秒²）
 static constexpr float JUMP_VELOCITY     = 9.0f;    // ジャンプ初速度（ブロック/秒）
@@ -157,6 +158,7 @@ void Player::update(float dt,
         velocity_y_ = 0.0f;
         on_ground_  = false;
 
+        if (pos.y < WORLD_BOTTOM) pos.y = WORLD_BOTTOM;
         camera_.setPosition(pos.x, pos.y, pos.z);
         return;
     }
@@ -206,6 +208,7 @@ void Player::update(float dt,
             }
         }
 
+        if (pos.y < WORLD_BOTTOM) { pos.y = WORLD_BOTTOM; velocity_y_ = 0.0f; }
         camera_.setPosition(pos.x, pos.y, pos.z);
         return;
     }
@@ -260,6 +263,7 @@ void Player::update(float dt,
         }
     }
 
+    if (pos.y < WORLD_BOTTOM) { pos.y = WORLD_BOTTOM; velocity_y_ = 0.0f; }
     camera_.setPosition(pos.x, pos.y, pos.z);
 }
 

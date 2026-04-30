@@ -131,7 +131,7 @@ void Renderer::initHud() {
     glGenBuffers(1, &hud_vbo_);
     glBindVertexArray(hud_vao_);
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
-    glBufferData(GL_ARRAY_BUFFER, 256 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, 1024 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
     glBindVertexArray(0);
@@ -205,27 +205,119 @@ void Renderer::appendNumber(float* verts, int& count, int value, float right, fl
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drawHud() — 照準とFPS数字を画面に描く
-//
-// 毎フレーム呼ばれ、照準（十字線）と右上のFPS数字をラインとして描画する。
+// appendLetter() — X / Y / Z のラベル文字を線分で描く
 // ─────────────────────────────────────────────────────────────────────────────
-void Renderer::drawHud(int fps) {
-    std::array<float, 256> verts{};
+void Renderer::appendLetter(float* verts, int& count, char letter,
+                            float left, float top, float w, float h) const {
+    const float right = left + w;
+    const float mid   = top - h * 0.5f;
+    const float bot   = top - h;
+    switch (letter) {
+        case 'X':
+            appendLine(verts, count, left, top,   right, bot);   // 左上→右下
+            appendLine(verts, count, right, top,  left,  bot);   // 右上→左下
+            break;
+        case 'Y':
+            appendLine(verts, count, left,  top,  (left+right)*0.5f, mid); // 左上→中央
+            appendLine(verts, count, right, top,  (left+right)*0.5f, mid); // 右上→中央
+            appendLine(verts, count, (left+right)*0.5f, mid, (left+right)*0.5f, bot); // 中央→下
+            break;
+        case 'Z':
+            appendLine(verts, count, left,  top,  right, top);   // 上横
+            appendLine(verts, count, right, top,  left,  bot);   // 斜め
+            appendLine(verts, count, left,  bot,  right, bot);   // 下横
+            break;
+        default:
+            break;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// appendSignedNumberLeft() — 符号付き整数を左揃えで描く
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::appendSignedNumberLeft(float* verts, int& count, int value,
+                                      float left, float top, float w, float h,
+                                      float gap) const {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%d", value < 0 ? -value : value);
+    int len = 0;
+    while (buf[len] != '\0') ++len;
+
+    float x = left;
+    if (value < 0) {
+        // マイナス符号（中横線）
+        float mid = top - h * 0.5f;
+        appendLine(verts, count, x, mid, x + w, mid);
+        x += w + gap;
+    }
+    for (int i = 0; i < len; ++i) {
+        appendDigit(verts, count, buf[i] - '0', x, top, w, h);
+        x += w + gap;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawHud() — 照準・FPS・座標を画面に描く
+//
+// 毎フレーム呼ばれ、照準（十字線）・右上のFPS・左上の座標をラインとして描画する。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawHud(int fps, int px, int py, int pz) {
+    std::array<float, 2048> verts{};
     int count = 0;
 
+    // NDC 変換係数（ピクセル値 → NDC）
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
     // 照準の十字線（画面中央の小さな十字）
-    float cx = 20.0f / (float)(width_  / 2);
-    float cy = 20.0f / (float)(height_ / 2);
+    float cx = 20.0f / hw;
+    float cy = 20.0f / hh;
     appendLine(verts.data(), count, -cx, 0.f, cx, 0.f);
     appendLine(verts.data(), count, 0.f, -cy, 0.f, cy);
 
     // FPS 数字（右上に表示）
-    float px = 14.0f / (float)(width_ / 2);
-    float py = 18.0f / (float)(height_ / 2);
-    float digit_w = 14.0f / (float)(width_ / 2);
-    float digit_h = 24.0f / (float)(height_ / 2);
-    float gap = 6.0f / (float)(width_ / 2);
-    appendNumber(verts.data(), count, fps, 1.0f - px, 1.0f - py, digit_w, digit_h, gap);
+    float fps_pad_x  = 14.0f / hw;
+    float fps_pad_y  = 18.0f / hh;
+    float digit_w    = 14.0f / hw;
+    float digit_h    = 24.0f / hh;
+    float gap        =  6.0f / hw;
+    appendNumber(verts.data(), count, fps,
+                 1.0f - fps_pad_x, 1.0f - fps_pad_y,
+                 digit_w, digit_h, gap);
+
+    // 座標表示（左上: X val | Y val | Z val を1行でコンパクトに表示）
+    float coord_x  = -1.0f + 10.0f / hw;   // 左端マージン
+    float coord_y  =  1.0f - 16.0f / hh;   // 上端マージン
+    float cw       =  9.0f / hw;            // 文字・数字幅
+    float ch       = 14.0f / hh;            // 文字・数字高さ
+    float clgap    =  5.0f / hw;            // ラベル→数値の隙間
+    float cngap    =  3.0f / hw;            // 数字桁間隔
+    float csep     =  9.0f / hw;            // グループ区切りスペース
+
+    struct { char label; int val; } coords[3] = {
+        { 'X', px }, { 'Y', py }, { 'Z', pz }
+    };
+    for (int i = 0; i < 3; ++i) {
+        appendLetter(verts.data(), count, coords[i].label, coord_x, coord_y, cw, ch);
+        coord_x += cw + clgap;
+
+        char nbuf[16];
+        int v = coords[i].val;
+        std::snprintf(nbuf, sizeof(nbuf), "%d", v < 0 ? -v : v);
+        int nlen = 0;
+        while (nbuf[nlen]) ++nlen;
+        int nchars = nlen + (v < 0 ? 1 : 0);
+
+        appendSignedNumberLeft(verts.data(), count, v, coord_x, coord_y, cw, ch, cngap);
+        coord_x += static_cast<float>(nchars) * (cw + cngap);
+
+        if (i < 2) {
+            coord_x += csep;
+            // 縦線セパレータ
+            appendLine(verts.data(), count, coord_x, coord_y + ch * 0.15f, coord_x, coord_y - ch * 1.15f);
+            coord_x += csep;
+        }
+    }
 
     // GPU に線分データを転送して描画
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
