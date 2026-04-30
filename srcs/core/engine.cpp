@@ -409,8 +409,11 @@ void Engine::run() {
         if (impl_->player.isInWater())
             impl_->renderer.drawUnderwaterOverlay();
 
-        // HUD（クロスヘア＋FPS表示）を最前面に描画
-        impl_->renderer.drawHud(fps_display);
+        // HUD（クロスヘア＋FPS＋座標表示）を最前面に描画
+        impl_->renderer.drawHud(fps_display,
+                                (int)std::floor(ppos.x),
+                                (int)std::floor(ppos.y),
+                                (int)std::floor(ppos.z));
 
         // 描画したバッファを画面に表示する（ダブルバッファリング）
         impl_->renderer.endFrame();
