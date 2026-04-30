@@ -11,11 +11,11 @@ all: configure
 configure:
 	$(CONFIGURE)
 
-run:
+run: all
 	./ft_vox $(RUN_ARGS)
 
 clean:
-	if [ -d $(BUILD_DIR) ]; then cmake --build $(BUILD_DIR) --target clean; fi
+	if [ -d $(BUILD_DIR) ]; then rm -rf $(BUILD_DIR); fi
 
 fclean: clean
 	rm -f ft_vox

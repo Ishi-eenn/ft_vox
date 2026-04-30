@@ -94,13 +94,17 @@ static void rebuildModified(int wx, int wz, ChunkManager& mgr) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Engine::Impl
 // ─────────────────────────────────────────────────────────────────────────────
+// Full day/night cycle duration in real seconds.
+static constexpr float DAY_DURATION = 600.0f;  // 10 minutes per cycle
+
 struct Engine::Impl {
     Renderer      renderer;
     World         world;
     Player        player;
-    ChunkManager* chunk_mgr = nullptr;  // constructed after world + renderer
+    ChunkManager* chunk_mgr = nullptr;
 
     BlockType selected_block = BlockType::Stone;
+    float     time_of_day    = 0.35f;  // start mid-morning (~8:30 am)
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -263,6 +267,11 @@ void Engine::run() {
                 }
             }
         }
+
+        // ── Day/night cycle ───────────────────────────────────────────────────
+        impl_->time_of_day += dt / DAY_DURATION;
+        if (impl_->time_of_day >= 1.0f) impl_->time_of_day -= 1.0f;
+        impl_->renderer.setTimeOfDay(impl_->time_of_day);
 
         // ── Chunk streaming ───────────────────────────────────────────────────
         glm::vec3 ppos = impl_->player.camera().position();
