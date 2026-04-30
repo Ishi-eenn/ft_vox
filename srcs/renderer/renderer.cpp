@@ -274,25 +274,38 @@ void Renderer::drawHud(int fps, int px, int py, int pz) {
                  1.0f - fps_pad_x, 1.0f - fps_pad_y,
                  digit_w, digit_h, gap);
 
-    // 座標表示（左上: X / Y / Z を3行で表示）
-    float coord_left  = -1.0f + 16.0f / hw;   // 左端マージン
-    float coord_top   =  1.0f - 18.0f / hh;   // 上端マージン
-    float row_h       = 36.0f / hh;            // 行間隔
-    float lw          = 14.0f / hw;            // 文字幅
-    float lh          = 24.0f / hh;            // 文字高さ
-    float lgap        =  8.0f / hw;            // 文字→数値の隙間
-    float ngap        =  6.0f / hw;            // 数字桁間隔
+    // 座標表示（左上: X val | Y val | Z val を1行でコンパクトに表示）
+    float coord_x  = -1.0f + 10.0f / hw;   // 左端マージン
+    float coord_y  =  1.0f - 16.0f / hh;   // 上端マージン
+    float cw       =  9.0f / hw;            // 文字・数字幅
+    float ch       = 14.0f / hh;            // 文字・数字高さ
+    float clgap    =  5.0f / hw;            // ラベル→数値の隙間
+    float cngap    =  3.0f / hw;            // 数字桁間隔
+    float csep     =  9.0f / hw;            // グループ区切りスペース
 
     struct { char label; int val; } coords[3] = {
         { 'X', px }, { 'Y', py }, { 'Z', pz }
     };
     for (int i = 0; i < 3; ++i) {
-        float row_top = coord_top - static_cast<float>(i) * row_h;
-        appendLetter(verts.data(), count, coords[i].label,
-                     coord_left, row_top, lw, lh);
-        appendSignedNumberLeft(verts.data(), count, coords[i].val,
-                               coord_left + lw + lgap, row_top,
-                               digit_w, digit_h, ngap);
+        appendLetter(verts.data(), count, coords[i].label, coord_x, coord_y, cw, ch);
+        coord_x += cw + clgap;
+
+        char nbuf[16];
+        int v = coords[i].val;
+        std::snprintf(nbuf, sizeof(nbuf), "%d", v < 0 ? -v : v);
+        int nlen = 0;
+        while (nbuf[nlen]) ++nlen;
+        int nchars = nlen + (v < 0 ? 1 : 0);
+
+        appendSignedNumberLeft(verts.data(), count, v, coord_x, coord_y, cw, ch, cngap);
+        coord_x += static_cast<float>(nchars) * (cw + cngap);
+
+        if (i < 2) {
+            coord_x += csep;
+            // 縦線セパレータ
+            appendLine(verts.data(), count, coord_x, coord_y + ch * 0.15f, coord_x, coord_y - ch * 1.15f);
+            coord_x += csep;
+        }
     }
 
     // GPU に線分データを転送して描画
