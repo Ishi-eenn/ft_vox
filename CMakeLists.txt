@@ -77,6 +77,7 @@ add_executable(
   srcs/renderer/texture_atlas.cpp
   srcs/renderer/skybox.cpp
   srcs/renderer/title_screen.cpp
+  srcs/renderer/minimap.cpp
   srcs/renderer/renderer.cpp
 )
 

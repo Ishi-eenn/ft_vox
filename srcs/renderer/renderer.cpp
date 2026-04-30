@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "renderer/renderer.hpp"
 #include "types.hpp"
+#include "world/world.hpp"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -36,6 +37,7 @@ Renderer::Renderer() = default;
 Renderer::~Renderer() {
     // シェーダープログラム・GPU バッファをすべて解放する
     title_screen_.destroy();
+    minimap_.destroy();
     chunk_shader_.destroy();
     sky_shader_.destroy();
     hud_shader_.destroy();
@@ -102,6 +104,12 @@ bool Renderer::init(GLFWwindow* window) {
     // ── タイトル画面の初期化 ────────────────────────────────────────────────
     title_screen_.init(atlas_, chunk_shader_, hud_shader_);
 
+    // ── ミニマップの初期化 ──────────────────────────────────────────────────
+    if (!minimap_.init()) {
+        std::cerr << "[Renderer] Failed to initialise minimap\n";
+        return false;
+    }
+
     return true;
 }
 
@@ -110,6 +118,14 @@ bool Renderer::init(GLFWwindow* window) {
 // ─────────────────────────────────────────────────────────────────────────────
 bool Renderer::drawTitleScreen(float dt) {
     return title_screen_.render(dt, window_, width_, height_);
+}
+
+void Renderer::updateMinimap(World& world, float px, float pz, float yaw_deg, float dt) {
+    minimap_.update(world, px, pz, yaw_deg, dt);
+}
+
+void Renderer::drawMinimap() {
+    minimap_.draw(hud_shader_, width_, height_);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
