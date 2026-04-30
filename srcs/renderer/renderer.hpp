@@ -4,6 +4,7 @@
 #include "renderer/texture_atlas.hpp"
 #include "renderer/frustum.hpp"
 #include "renderer/skybox.hpp"
+#include "renderer/title_screen.hpp"
 #include <vector>
 
 struct GLFWwindow;
@@ -22,6 +23,8 @@ public:
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
     void drawHud(int fps);
     void drawUnderwaterOverlay();
+    // Returns true when the player presses SPACE to start the game
+    bool drawTitleScreen(float dt);
     void endFrame() override;
     void onResize(int w, int h) override;
 
@@ -45,6 +48,8 @@ private:
     Skybox       skybox_;
     Frustum      frustum_;
     int          width_ = 1280, height_ = 720;
+
+    TitleScreen  title_screen_;
 
     uint32_t     hud_vao_     = 0;
     uint32_t     hud_vbo_     = 0;

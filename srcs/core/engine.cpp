@@ -238,6 +238,50 @@ bool Engine::init(uint32_t seed, int width, int height) {
 // ─────────────────────────────────────────────────────────────────────────────
 void Engine::run() {
     using Clock = std::chrono::steady_clock;
+
+    // ── タイトル画面ループ ───────────────────────────────────────────────────
+    // SPACE が押されるまでタイトル画面を表示し続ける。
+    // プレイヤーの入力処理やチャンクのストリーミングはまだ行わない。
+    {
+        auto prev = Clock::now();
+        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        while (running_) {
+            auto  now = Clock::now();
+            float dt  = std::chrono::duration<float>(now - prev).count();
+            prev      = now;
+            if (dt > 0.1f) dt = 0.1f;
+
+            glfwPollEvents();
+            if (glfwWindowShouldClose(window_) ||
+                glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                running_ = false; break;
+            }
+
+            // リサイズ対応（タイトル画面中もウィンドウサイズが変わる可能性がある）
+            if (impl_->player.wasResized()) {
+                width_  = impl_->player.resizeW();
+                height_ = impl_->player.resizeH();
+                if (width_ > 0 && height_ > 0) {
+                    impl_->renderer.onResize(width_, height_);
+                    impl_->player.camera().setAspect((float)width_ / (float)height_);
+                }
+                impl_->player.clearResize();
+            }
+
+            bool start = impl_->renderer.drawTitleScreen(dt);
+            impl_->renderer.endFrame();
+
+            if (start) break;
+        }
+        // ゲーム開始: カーソルをキャプチャしてプレイヤー操作に切り替える
+        if (running_) {
+            glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
+    }
+
+    if (!running_) return;
+
+    // ── メインゲームループ ───────────────────────────────────────────────────
     auto prev   = Clock::now();
     float fps_timer       = 0.0f;
     int   fps_frames      = 0;
