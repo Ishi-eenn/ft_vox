@@ -5,9 +5,11 @@
 #include "renderer/frustum.hpp"
 #include "renderer/skybox.hpp"
 #include "renderer/title_screen.hpp"
+#include "renderer/minimap.hpp"
 #include <vector>
 
 struct GLFWwindow;
+class World;
 
 class Renderer : public IRenderer {
 public:
@@ -25,6 +27,9 @@ public:
     void drawUnderwaterOverlay();
     // Returns true when the player presses SPACE to start the game
     bool drawTitleScreen(float dt);
+    // Update the minimap texture from world data, then render it
+    void updateMinimap(World& world, float px, float pz, float yaw_deg, float dt);
+    void drawMinimap();
     void endFrame() override;
     void onResize(int w, int h) override;
 
@@ -52,6 +57,7 @@ private:
     int          width_ = 1280, height_ = 720;
 
     TitleScreen  title_screen_;
+    Minimap      minimap_;
 
     uint32_t     hud_vao_     = 0;
     uint32_t     hud_vbo_     = 0;

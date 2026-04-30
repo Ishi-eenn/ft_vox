@@ -459,6 +459,11 @@ void Engine::run() {
                                 (int)std::floor(ppos.y),
                                 (int)std::floor(ppos.z));
 
+        // ミニマップ（左上）を更新して描画
+        impl_->renderer.updateMinimap(impl_->world, ppos.x, ppos.z,
+                                      impl_->player.camera().getYaw(), dt);
+        impl_->renderer.drawMinimap();
+
         // 描画したバッファを画面に表示する（ダブルバッファリング）
         impl_->renderer.endFrame();
         ++frame_;
