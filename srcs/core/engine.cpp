@@ -217,7 +217,7 @@ bool Engine::init(uint32_t seed, int width, int height) {
     impl_->player.camera().setAspect((float)width_ / (float)height_);
 
     // ── チャンクマネージャーの初期化 ───────────────────────────────────────────
-    impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer);
+    impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer, impl_->world.terrainGen());
 
     running_ = true;
     fprintf(stderr, "[Engine] init OK  seed=%u  %dx%d\n", seed, width_, height_);

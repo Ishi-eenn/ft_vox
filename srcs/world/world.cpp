@@ -195,6 +195,31 @@ Chunk* World::getOrCreateChunk(ChunkPos pos) {
     return raw;
 }
 
+// allocateChunk() — 空チャンクを確保してmapに挿入する（地形生成なし）
+//
+// 非同期生成用: メインスレッドがチャンクのメモリを確保し、
+// ワーカースレッドが後から blocks[] にデータを書き込む。
+// メインスレッドからのみ呼ぶこと。
+Chunk* World::allocateChunk(ChunkPos pos) {
+    auto it = chunks_.find(pos);
+    if (it != chunks_.end()) return it->second.get();
+
+    auto chunk = std::make_unique<Chunk>();
+    chunk->pos = pos;
+    // is_generated = false のまま（ワーカーが後で true にする）
+    Chunk* raw = chunk.get();
+    chunks_[pos] = std::move(chunk);
+    return raw;
+}
+
+// findChunk() — 存在するチャンクを返す。なければ nullptr。
+//
+// 生成副作用なし。メインスレッドからのみ呼ぶこと。
+Chunk* World::findChunk(ChunkPos pos) const {
+    auto it = chunks_.find(pos);
+    return it != chunks_.end() ? it->second.get() : nullptr;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // stepWater() — 水シミュレーションを1ステップ進める
 //

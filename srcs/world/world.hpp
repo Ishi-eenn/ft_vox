@@ -11,8 +11,11 @@ public:
     ~World() override = default;
 
     Chunk* getOrCreateChunk(ChunkPos pos) override;
+    Chunk* allocateChunk(ChunkPos pos) override;
+    Chunk* findChunk(ChunkPos pos) const override;
     void   setSeed(uint32_t seed) override;
     uint32_t getSeed() const override { return seed_; }
+    const TerrainGenerator& terrainGen() const { return gen_; }
 
     // Block access in world coordinates (no chunk generation side-effects)
     BlockType getWorldBlock(int wx, int wy, int wz) const;
