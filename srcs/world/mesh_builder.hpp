@@ -23,6 +23,15 @@ private:
         int nx, int ny, int nz,
         const Chunk& chunk,
         const ChunkNeighbors& neighbors);
+    // 隣接ブロック位置の空の明るさ・ブロックの明るさを取得（チャンク境界対応）
+    static uint8_t getNeighborSkyLight(
+        int nx, int ny, int nz,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
+    static uint8_t getNeighborBlockLight(
+        int nx, int ny, int nz,
+        const Chunk& chunk,
+        const ChunkNeighbors& neighbors);
     static uint8_t getNeighborWaterLevel(
         int nx, int ny, int nz,
         const Chunk& chunk,

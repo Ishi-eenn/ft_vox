@@ -99,10 +99,11 @@ static void addFace(std::vector<Vertex>& verts, std::vector<uint32_t>& idx,
                     float u0, float v0, float u1, float v1)
 {
     uint32_t base = static_cast<uint32_t>(verts.size());
-    verts.push_back({p0.x, p0.y, p0.z, u0, v0, n.x, n.y, n.z});
-    verts.push_back({p1.x, p1.y, p1.z, u0, v1, n.x, n.y, n.z});
-    verts.push_back({p2.x, p2.y, p2.z, u1, v1, n.x, n.y, n.z});
-    verts.push_back({p3.x, p3.y, p3.z, u1, v0, n.x, n.y, n.z});
+    // sky_light=1.0, block_light=1.0 でタイトル画面ブロックを常に最大輝度にする
+    verts.push_back({p0.x, p0.y, p0.z, u0, v0, n.x, n.y, n.z, 1.0f, 1.0f});
+    verts.push_back({p1.x, p1.y, p1.z, u0, v1, n.x, n.y, n.z, 1.0f, 1.0f});
+    verts.push_back({p2.x, p2.y, p2.z, u1, v1, n.x, n.y, n.z, 1.0f, 1.0f});
+    verts.push_back({p3.x, p3.y, p3.z, u1, v0, n.x, n.y, n.z, 1.0f, 1.0f});
     idx.push_back(base+0); idx.push_back(base+1); idx.push_back(base+2);
     idx.push_back(base+0); idx.push_back(base+2); idx.push_back(base+3);
 }
@@ -170,6 +171,12 @@ void TitleScreen::buildCube(const AtlasUV& uv) {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                           reinterpret_cast<void*>(offsetof(Vertex, nx)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offsetof(Vertex, sky_light)));
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, stride,
+                          reinterpret_cast<void*>(offsetof(Vertex, block_light)));
 
     glBindVertexArray(0);
 }
@@ -303,10 +310,9 @@ bool TitleScreen::render(float dt, GLFWwindow* window, int w, int h) {
     glm::mat4 mvp = proj * view * model;
 
     chunk_shader_->use();
-    chunk_shader_->setMat4 ("uMVP",         glm::value_ptr(mvp));
-    chunk_shader_->setVec3 ("uSunDir",      0.55f, 0.85f, 0.25f);
-    chunk_shader_->setFloat("uAmbient",     0.38f);
-    chunk_shader_->setFloat("uSunStrength", 0.52f);
+    chunk_shader_->setMat4("uMVP",       glm::value_ptr(mvp));
+    // sky_darken=0: タイトル画面ブロックは常に昼間の最大輝度で描画
+    chunk_shader_->setInt ("uSkyDarken", 0);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, atlas_tex_);
     chunk_shader_->setInt("uAtlas", 0);

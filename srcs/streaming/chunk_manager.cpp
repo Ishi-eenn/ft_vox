@@ -17,6 +17,7 @@
 //   容量が足りなくなったら末尾（一番古い）から削除する。
 // ─────────────────────────────────────────────────────────────────────────────
 #include "streaming/chunk_manager.hpp"
+#include "world/light_calculator.hpp"
 #include "renderer/frustum.hpp"
 #include <cstdio>
 #include <cmath>
@@ -268,6 +269,8 @@ void ChunkManager::buildMesh(Chunk* chunk) {
     if (nb.east  && !nb.east->is_generated)  nb.east  = nullptr;
     if (nb.west  && !nb.west->is_generated)  nb.west  = nullptr;
 
+    // 光の計算はメッシュ構築の前に行う（光レベルを頂点データに埋め込むため）
+    LightCalculator::compute(*chunk, nb);
     MeshBuilder::build(*chunk, nb);
 }
 

@@ -70,6 +70,7 @@ add_executable(
   srcs/streaming/chunk_manager.cpp
   srcs/world/noise.cpp
   srcs/world/terrain_gen.cpp
+  srcs/world/light_calculator.cpp
   srcs/world/mesh_builder.cpp
   srcs/world/world.cpp
   srcs/core/engine.cpp

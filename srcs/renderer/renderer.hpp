@@ -72,4 +72,6 @@ private:
     float sky_horizon_[3]  = {0.55f, 0.72f, 0.90f};
     float sky_ground_[3]   = {0.35f, 0.30f, 0.25f};
     float sun_color_[3]    = {1.00f, 0.98f, 0.85f};
+    // Minecraft準拠の空の明るさ減衰量（0=昼, 11=夜、0〜15の16段階）
+    int   sky_darken_      = 0;
 };

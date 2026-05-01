@@ -79,6 +79,59 @@ static void getAtlasUV(BlockType type, Face face, float& u0, float& v0, float& u
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// getNeighborSkyLight() / getNeighborBlockLight() — 隣接位置の光レベルを取得
+//
+// チャンク内なら light_map から直接取得、チャンク外なら隣チャンクを参照する。
+// 隣チャンクが未ロードの場合: 空の明るさは MAX（境界が暗くならないよう）、
+//                             ブロックの明るさは 0 とする。
+// Y 上方向（>= CHUNK_SIZE_Y）は空なので MAX_LIGHT_LEVEL を返す。
+// ─────────────────────────────────────────────────────────────────────────────
+uint8_t MeshBuilder::getNeighborSkyLight(
+    int nx, int ny, int nz,
+    const Chunk& chunk,
+    const ChunkNeighbors& nb)
+{
+    if (ny >= CHUNK_SIZE_Y) return MAX_LIGHT_LEVEL;  // 上空 = 最大輝度
+    if (ny < 0) return 0;                             // 地下 = 暗闇
+
+    bool out_x_pos = nx >= CHUNK_SIZE_X;
+    bool out_x_neg = nx < 0;
+    bool out_z_pos = nz >= CHUNK_SIZE_Z;
+    bool out_z_neg = nz < 0;
+
+    if (!out_x_pos && !out_x_neg && !out_z_pos && !out_z_neg)
+        return chunk.getSkyLight(nx, ny, nz);
+
+    if (out_x_pos && nb.east)  return nb.east->getSkyLight(0,              ny, nz);
+    if (out_x_neg && nb.west)  return nb.west->getSkyLight(CHUNK_SIZE_X-1, ny, nz);
+    if (out_z_pos && nb.south) return nb.south->getSkyLight(nx, ny, 0);
+    if (out_z_neg && nb.north) return nb.north->getSkyLight(nx, ny, CHUNK_SIZE_Z-1);
+    return MAX_LIGHT_LEVEL;  // 未ロード隣チャンク = 明るいとみなす（暗い境界を防ぐ）
+}
+
+uint8_t MeshBuilder::getNeighborBlockLight(
+    int nx, int ny, int nz,
+    const Chunk& chunk,
+    const ChunkNeighbors& nb)
+{
+    if (ny < 0 || ny >= CHUNK_SIZE_Y) return 0;
+
+    bool out_x_pos = nx >= CHUNK_SIZE_X;
+    bool out_x_neg = nx < 0;
+    bool out_z_pos = nz >= CHUNK_SIZE_Z;
+    bool out_z_neg = nz < 0;
+
+    if (!out_x_pos && !out_x_neg && !out_z_pos && !out_z_neg)
+        return chunk.getBlockLight(nx, ny, nz);
+
+    if (out_x_pos && nb.east)  return nb.east->getBlockLight(0,              ny, nz);
+    if (out_x_neg && nb.west)  return nb.west->getBlockLight(CHUNK_SIZE_X-1, ny, nz);
+    if (out_z_pos && nb.south) return nb.south->getBlockLight(nx, ny, 0);
+    if (out_z_neg && nb.north) return nb.north->getBlockLight(nx, ny, CHUNK_SIZE_Z-1);
+    return 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // getNeighborBlock() — チャンク境界をまたいで隣ブロックの種類を取得
 //
 // チャンク内なら直接取得、チャンク外なら隣チャンクから取得する。
@@ -234,6 +287,21 @@ void MeshBuilder::addFace(
         computeWaterTopHeights(water_top, x, y, z, chunk, neighbors);
     }
 
+    // この面が向いている方向のオフセット（面に隣接する空間の座標）
+    static const int FACE_DX[6] = { 0, 0, 0, 0, 1,-1};
+    static const int FACE_DY[6] = { 1,-1, 0, 0, 0, 0};
+    static const int FACE_DZ[6] = { 0, 0,-1, 1, 0, 0};
+
+    int fi = (int)face;
+    int light_nx = x + FACE_DX[fi];
+    int light_ny = y + FACE_DY[fi];
+    int light_nz = z + FACE_DZ[fi];
+
+    // 面が向いている側（外側の空間）の光レベルを取得
+    // Minecraftと同じ方式: 面の明るさは、その面が接する空間の光レベルで決まる
+    float sky_lf   = (float)getNeighborSkyLight  (light_nx, light_ny, light_nz, chunk, neighbors) / (float)MAX_LIGHT_LEVEL;
+    float block_lf = (float)getNeighborBlockLight(light_nx, light_ny, light_nz, chunk, neighbors) / (float)MAX_LIGHT_LEVEL;
+
     // 4頂点を生成
     for (int i = 0; i < 4; ++i) {
         Vertex vtx;
@@ -258,6 +326,11 @@ void MeshBuilder::addFace(
 
         // 法線ベクトル（ライティング計算に使う）
         vtx.nx = fn[0];  vtx.ny = fn[1];  vtx.nz = fn[2];
+
+        // 光レベル（Minecraft準拠: 0〜15を0.0〜1.0に正規化して格納）
+        vtx.sky_light   = sky_lf;
+        vtx.block_light = block_lf;
+
         verts.push_back(vtx);
     }
 

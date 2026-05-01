@@ -415,10 +415,12 @@ void Renderer::uploadChunkMesh(Chunk* chunk) {
                  GL_STATIC_DRAW);
 
     // 頂点属性レイアウト — struct Vertex のメモリ配置に合わせる:
-    //   オフセット  0: 位置 (x, y, z) — location 0 に対応
-    //   オフセット 12: UV  (u, v)     — location 1 に対応
-    //   オフセット 20: 法線 (nx,ny,nz)— location 2 に対応
-    //   ストライド: sizeof(Vertex) = 32 バイト
+    //   オフセット  0: 位置 (x, y, z)        — location 0
+    //   オフセット 12: UV  (u, v)             — location 1
+    //   オフセット 20: 法線 (nx, ny, nz)      — location 2
+    //   オフセット 32: 空の明るさ (sky_light)  — location 3
+    //   オフセット 36: ブロック明るさ          — location 4
+    //   ストライド: sizeof(Vertex) = 40 バイト
     const GLsizei stride = static_cast<GLsizei>(sizeof(Vertex));
 
     glEnableVertexAttribArray(0);
@@ -432,6 +434,14 @@ void Renderer::uploadChunkMesh(Chunk* chunk) {
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                           (void*)offsetof(Vertex, nx));
+
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, stride,
+                          (void*)offsetof(Vertex, sky_light));
+
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, stride,
+                          (void*)offsetof(Vertex, block_light));
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -516,12 +526,10 @@ static glm::mat4 buildMVP(const Chunk* chunk,
 //   シェーダー（GPU プログラム）に渡す定数。毎頂点同じ値を使う場合に使用する。
 //   太陽の方向・環境光・太陽光の強さを渡して、シェーダー内で明暗計算させる。
 // ─────────────────────────────────────────────────────────────────────────────
-static void setChunkLightingUniforms(Shader& shader,
-                                     const float sun_dir[3],
-                                     float ambient, float sun_strength) {
-    shader.setVec3 ("uSunDir",      sun_dir[0],   sun_dir[1],   sun_dir[2]);
-    shader.setFloat("uAmbient",     ambient);
-    shader.setFloat("uSunStrength", sun_strength);
+// Minecraft準拠のライティングユニフォームをシェーダーに送る。
+// sky_darken: 昼夜による空の明るさ減衰量（0=昼・最大輝度、11=夜・最小輝度）
+static void setChunkLightingUniforms(Shader& shader, int sky_darken) {
+    shader.setInt("uSkyDarken", sky_darken);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -537,7 +545,7 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
-    setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
+    setChunkLightingUniforms(chunk_shader_, sky_darken_);
     atlas_.bind(0);                    // テクスチャスロット 0 にアトラスを bind
     chunk_shader_.setInt("uAtlas", 0);
 
@@ -565,7 +573,7 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
-    setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
+    setChunkLightingUniforms(chunk_shader_, sky_darken_);
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
 
@@ -713,4 +721,16 @@ void Renderer::setTimeOfDay(float t) {
 
     // 太陽が水平線より下のときは拡散光（太陽光）を出さない
     if (elev < 0.0f) sun_strength_ = 0.0f;
+
+    // ── Minecraft準拠の空の明るさ減衰量（sky_darken）を計算 ──────────────────
+    // 昼（太陽が地平線より上）: 0（減衰なし）
+    // 夕暮れ・夜明け移行期: 0 → 11 に線形増加
+    // 夜: 11（最大減衰: 空の明るさ15 - 11 = 4が最大値）
+    if (elev >= 0.0f) {
+        sky_darken_ = 0;
+    } else {
+        float f = clamp01(-elev / 0.20f);  // elev 0→-0.2 で f 0→1
+        sky_darken_ = static_cast<int>(11.0f * f + 0.5f);
+        if (sky_darken_ > 11) sky_darken_ = 11;
+    }
 }
