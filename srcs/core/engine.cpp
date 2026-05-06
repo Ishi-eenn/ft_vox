@@ -148,6 +148,7 @@ struct Engine::Impl {
 
     BlockType selected_block = BlockType::Stone;  // 現在選択中のブロック種類
     float     time_of_day    = 0.35f;  // 時刻（0=深夜, 0.25=日の出, 0.5=正午, 0.75=日の入り）
+    bool      show_minimap_  = true;   // M キーでトグル
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -350,6 +351,15 @@ void Engine::run() {
             impl_->player.clearResize();
         }
 
+        // ── M キー: ミニマップ表示切り替え ───────────────────────────────────
+        {
+            InputHandler& inp = impl_->player.input();
+            static bool prev_m = false;
+            bool cur_m = inp.isHeld(GLFW_KEY_M);
+            if (cur_m && !prev_m) impl_->show_minimap_ = !impl_->show_minimap_;
+            prev_m = cur_m;
+        }
+
         // ── ブロック種類の選択・操作 ─────────────────────────────────────────
         {
             InputHandler& inp = impl_->player.input();
@@ -459,10 +469,12 @@ void Engine::run() {
                                 (int)std::floor(ppos.y),
                                 (int)std::floor(ppos.z));
 
-        // ミニマップ（左上）を更新して描画
-        impl_->renderer.updateMinimap(impl_->world, ppos.x, ppos.z,
-                                      impl_->player.camera().getYaw(), dt);
-        impl_->renderer.drawMinimap();
+        // ミニマップ（左上）を更新して描画（M キーでトグル）
+        if (impl_->show_minimap_) {
+            impl_->renderer.updateMinimap(impl_->world, ppos.x, ppos.z,
+                                          impl_->player.camera().getYaw(), dt);
+            impl_->renderer.drawMinimap();
+        }
 
         // 描画したバッファを画面に表示する（ダブルバッファリング）
         impl_->renderer.endFrame();
