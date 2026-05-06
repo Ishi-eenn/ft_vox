@@ -778,9 +778,12 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                     t = BlockType::Water;
                 }
 
-                if (t != BlockType::Air && t != BlockType::Water
-                        && y > 5 && y < surface - 3) {
-                    if (noise_.getCave(wx, (float)y, wz) > 0.55f)
+                if (t != BlockType::Air && t != BlockType::Water && y > 5) {
+                    float fy = (float)y;
+                    // 縦長洞窟（等方性）と横長洞窟（Y圧縮）のどちらかが閾値を超えれば空洞にする
+                    bool vert  = noise_.getCave     (wx, fy, wz) > 0.62f;
+                    bool horiz = noise_.getCaveHoriz(wx, fy, wz) > 0.65f;
+                    if (vert || horiz)
                         t = BlockType::Air;
                 }
 

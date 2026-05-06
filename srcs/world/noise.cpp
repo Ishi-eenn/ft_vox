@@ -29,17 +29,19 @@
 // このヘッダーに露出させないため（PImpl パターン）。
 // ─────────────────────────────────────────────────────────────────────────────
 NoiseGen::NoiseGen() {
-    height_noise_ = new FastNoiseLite();  // 地形の高さ用
-    valley_noise_ = new FastNoiseLite();  // 谷・山脈の切り立ち用
-    cave_noise_   = new FastNoiseLite();  // 洞窟の空洞用
-    temp_noise_   = new FastNoiseLite();  // バイオーム：気温マップ用
-    humid_noise_  = new FastNoiseLite();  // バイオーム：湿度マップ用
+    height_noise_     = new FastNoiseLite();  // 地形の高さ用
+    valley_noise_     = new FastNoiseLite();  // 谷・山脈の切り立ち用
+    cave_noise_       = new FastNoiseLite();  // 洞窟の空洞用（等方性）
+    cave_horiz_noise_ = new FastNoiseLite();  // 横長洞窟用（Y圧縮）
+    temp_noise_       = new FastNoiseLite();  // バイオーム：気温マップ用
+    humid_noise_      = new FastNoiseLite();  // バイオーム：湿度マップ用
 }
 
 NoiseGen::~NoiseGen() {
     delete (FastNoiseLite*)height_noise_;
     delete (FastNoiseLite*)valley_noise_;
     delete (FastNoiseLite*)cave_noise_;
+    delete (FastNoiseLite*)cave_horiz_noise_;
     delete (FastNoiseLite*)temp_noise_;
     delete (FastNoiseLite*)humid_noise_;
 }
@@ -76,13 +78,23 @@ void NoiseGen::setSeed(uint32_t seed) {
     vn->SetFractalLacunarity(2.0f);
     vn->SetFractalGain(0.5f);
 
-    // ── 洞窟ノイズ ── 地下に空洞を作る ────────────────────────────────────
-    // 3D ノイズ（X/Y/Z）でノイズ値が閾値を超えた場所を空洞にする。
-    // Frequency 0.05: 細かいスケールで洞窟を刻む
+    // ── 通常洞窟ノイズ ── 等方性の空洞を作る ──────────────────────────────
+    // Frequency 0.025: 周波数を下げることで1つの洞窟を大きく広げる
+    // 閾値は terrain_gen.cpp 側で 0.62 に設定
     auto* cn = (FastNoiseLite*)cave_noise_;
     cn->SetSeed((int)(seed ^ 0xDEADBEEFu));
     cn->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
-    cn->SetFrequency(0.05f);
+    cn->SetFrequency(0.025f);
+
+    // ── 横長洞窟ノイズ ── Y方向を圧縮して平たい空洞を作る ─────────────────
+    // getCaveHoriz() 内で Y に 4.0 を掛けてサンプリングするため、
+    // Y方向の有効周波数 = 0.025 × 4 = 0.1 → Y範囲 ≈ 10 ブロック
+    // X/Z方向の有効周波数 = 0.025 → X/Z範囲 ≈ 40 ブロック
+    // 結果: 高さ10・幅40ブロック程度の横長トンネル状洞窟が生成される
+    auto* chn = (FastNoiseLite*)cave_horiz_noise_;
+    chn->SetSeed((int)(seed ^ 0xBEEFDEADu));  // 通常洞窟と異なるシードで独立した形状に
+    chn->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+    chn->SetFrequency(0.025f);
 
     // ── 気温ノイズ ── バイオームの大きな区分けを作る ────────────────────────
     // 非常に低い周波数（0.0008）= 約1250ブロックで1サイクル → 広大なバイオーム域
@@ -119,9 +131,14 @@ float NoiseGen::getValley(float x, float z) const {
     return ((FastNoiseLite*)valley_noise_)->GetNoise(x, z);
 }
 
-// 洞窟ノイズ（3D: X/Y/Z 全方向で変化）
+// 通常洞窟ノイズ（3D: 等方性）
 float NoiseGen::getCave(float x, float y, float z) const {
     return ((FastNoiseLite*)cave_noise_)->GetNoise(x, y, z);
+}
+
+// 横長洞窟ノイズ（3D: Y を 4 倍に圧縮 → 高さが狭く幅が広い平たい空洞）
+float NoiseGen::getCaveHoriz(float x, float y, float z) const {
+    return ((FastNoiseLite*)cave_horiz_noise_)->GetNoise(x, y * 4.0f, z);
 }
 
 // バイオーム気温ノイズ（2D）

@@ -192,6 +192,22 @@ Chunk* World::getOrCreateChunk(ChunkPos pos) {
 
     Chunk* raw = chunk.get();
     chunks_[pos] = std::move(chunk);
+
+    // 洞窟生成で水ブロックの直下が空洞になっている場合、
+    // 水シミュレーション対象として登録して流れ出すようにする
+    const int base_wx = pos.x * CHUNK_SIZE_X;
+    const int base_wz = pos.z * CHUNK_SIZE_Z;
+    for (int x = 0; x < CHUNK_SIZE_X; ++x) {
+        for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+            for (int y = 1; y < CHUNK_SIZE_Y; ++y) {
+                if (raw->getBlock(x, y,     z) == BlockType::Water &&
+                    raw->getBlock(x, y - 1, z) == BlockType::Air) {
+                    activateWaterAt(base_wx + x, y, base_wz + z);
+                }
+            }
+        }
+    }
+
     return raw;
 }
 
