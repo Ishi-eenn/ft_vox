@@ -8,6 +8,14 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
+#include <ctime>
+
+static const BlockType kShowBlocks[] = {
+    BlockType::Grass, BlockType::Dirt,  BlockType::Stone,
+    BlockType::Sand,  BlockType::Snow,  BlockType::Wood,
+};
+static constexpr int kShowCount = (int)(sizeof(kShowBlocks) / sizeof(kShowBlocks[0]));
 
 // ── Glyph definitions (segment-based, unit cell [0,1]×[0,1]) ─────────────────
 // Segments: {x0, y0, x1, y1}, (0,0)=bottom-left (1,1)=top-right
@@ -269,7 +277,9 @@ bool TitleScreen::init(TextureAtlas& atlas, Shader& chunk_shader, Shader& hud_sh
     hud_shader_   = &hud_shader;
     atlas_tex_    = atlas.glId();
 
-    buildCube(atlas.getUV(BlockType::Dirt));
+    std::srand(static_cast<unsigned>(std::time(nullptr)));
+    const int idx = std::rand() % kShowCount;
+    buildCube(atlas.getUV(kShowBlocks[idx]));
     buildTextBuffers();
     return true;
 }
