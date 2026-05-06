@@ -378,10 +378,34 @@ void Engine::run() {
                         rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
                     }
                     // 右クリック: 当たる直前のマスに選択中ブロックを置く
+                    // NORMALモードではプレイヤーが占有しているブロックへの配置を禁止する
                     if (inp.wasRightClicked()) {
-                        impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
-                                                   impl_->selected_block);
-                        rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                        bool can_place = true;
+                        if (!impl_->player.isFlyMode()) {
+                            // プレイヤーAABB: 足元 = カメラY - 1.62, 頭 = 足元 + 1.8
+                            // 幅 0.3 (half)
+                            static constexpr float EYE_H  = 1.62f;
+                            static constexpr float P_HEIGHT = 1.80f;
+                            static constexpr float HALF_W  = 0.30f;
+                            float feet = pos.y - EYE_H;
+                            float head = feet + P_HEIGHT;
+                            // 配置先ブロックのAABBとプレイヤーAABBが重なるか判定
+                            float bmin_x = (float)hit.nx,       bmax_x = (float)(hit.nx + 1);
+                            float bmin_y = (float)hit.ny,       bmax_y = (float)(hit.ny + 1);
+                            float bmin_z = (float)hit.nz,       bmax_z = (float)(hit.nz + 1);
+                            float pmin_x = pos.x - HALF_W,     pmax_x = pos.x + HALF_W;
+                            float pmin_z = pos.z - HALF_W,     pmax_z = pos.z + HALF_W;
+                            if (pmax_x > bmin_x && pmin_x < bmax_x &&
+                                head    > bmin_y && feet   < bmax_y &&
+                                pmax_z  > bmin_z && pmin_z < bmax_z) {
+                                can_place = false;
+                            }
+                        }
+                        if (can_place) {
+                            impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
+                                                       impl_->selected_block);
+                            rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                        }
                     }
                 }
             }

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <unordered_set>
+#include <atomic>
 
 class Frustum;
 struct AABB;
@@ -39,9 +40,13 @@ private:
     void loadRadius(ChunkPos center);
     void uploadPending(int max_per_frame);
     void evictIfOverBudget();
-    void buildMesh(Chunk* chunk);
-    void processGenDone();  // 完了したワーカータスクをメインスレッドで処理する
-    void workerLoop();      // ワーカースレッドのメインループ
+    void buildMesh(Chunk* chunk, const ChunkNeighbors& nb);
+    void processGenDone();       // gen完了チャンクをメッシュタスクキューに投入する（軽量）
+    void processMeshDone();      // メッシュ構築完了チャンクをLRU管理・アップロードキューへ追加
+    void processRebuildDirty();  // 延期された隣接チャンク再構築をアップロード後に処理する
+    void workerLoop();           // 地形生成ワーカースレッドのメインループ
+    void meshWorkerLoop();       // メッシュ構築ワーカースレッドのメインループ
+    void enqueueMeshBuild(ChunkPos pos, Chunk* chunk);  // メインスレッドのみ呼ぶ
 
     IWorld&                   world_;
     IRenderer&                renderer_;
@@ -54,7 +59,7 @@ private:
     uint64_t           last_debug_frame_ = 0;
     int                render_distance_  = RENDER_DISTANCE;
 
-    // ── ワーカースレッド関連 ────────────────────────────────────────────────────
+    // ── 地形生成ワーカースレッド関連 ─────────────────────────────────────────────
     std::vector<std::thread>  gen_threads_;
 
     // gen_tasks_ と gen_in_flight_ を保護する mutex
@@ -62,9 +67,36 @@ private:
     std::condition_variable   gen_cv_;
     std::queue<std::pair<ChunkPos, Chunk*>> gen_tasks_;
     std::unordered_set<ChunkPos, ChunkPosHash> gen_in_flight_;
-    bool                      stopping_ = false;
 
-    // ワーカー → メイン への完了通知キュー
+    // gen/mesh 両ワーカーが参照するため atomic
+    std::atomic<bool>         stopping_{false};
+
+    // 地形生成完了 → メインスレッドへの通知キュー
     std::mutex                done_mutex_;
     std::queue<ChunkPos>      gen_done_queue_;
+
+    // ── メッシュ構築ワーカースレッド関連 ──────────────────────────────────────────
+    // MeshTask: neighborはメインスレッドで解決済み（findChunk競合回避）
+    struct MeshTask {
+        ChunkPos       pos;
+        Chunk*         chunk;
+        ChunkNeighbors neighbors;
+    };
+
+    std::vector<std::thread>  mesh_threads_;
+    std::mutex                mesh_mutex_;
+    std::condition_variable   mesh_cv_;
+    std::queue<MeshTask>      mesh_tasks_;
+    std::unordered_set<ChunkPos, ChunkPosHash> mesh_in_flight_;
+
+    // メッシュ構築完了 → メインスレッドへの通知キュー
+    std::mutex                mesh_done_mutex_;
+    std::queue<ChunkPos>      mesh_done_queue_;
+
+    // ── メインスレッド専用（ロック不要） ─────────────────────────────────────────
+    // upload_queue_ に入っているチャンクを追跡する（再ビルド競合防止）
+    std::unordered_set<ChunkPos, ChunkPosHash> upload_pending_;
+
+    // uploadPending後に処理する隣接再ビルドの延期セット
+    std::unordered_set<ChunkPos, ChunkPosHash> rebuild_dirty_;
 };
