@@ -18,6 +18,7 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 include(FetchContent)
 
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 
 if(FT_VOX_FETCH_DEPS)
   FetchContent_Declare(
@@ -98,6 +99,7 @@ target_link_libraries(
     glfw
     glm::glm
     ft_vox_fastnoise
+    Threads::Threads
 )
 
 set_target_properties(

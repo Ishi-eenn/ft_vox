@@ -6,6 +6,12 @@
 #include "world/mesh_builder.hpp"
 #include <queue>
 #include <vector>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <unordered_set>
+#include <memory>
 
 class Frustum;
 struct AABB;
@@ -19,14 +25,9 @@ public:
     std::vector<Chunk*> getVisibleChunks(const Frustum& frustum) override;
     size_t loadedCount() const override { return loaded_.size(); }
 
-    // Destroy all GPU resources. Call before OpenGL context teardown.
     void destroyAll();
-
-    // Rebuild the mesh for a single chunk (e.g. after a block edit).
-    // Also rebuilds the 4 cardinal neighbors if the edited block was on a border.
     void rebuildChunkAt(ChunkPos pos);
 
-    // Dynamic render distance — clamped to [RENDER_DISTANCE_MIN, RENDER_DISTANCE_MAX].
     void setRenderDistance(int rd);
     int  renderDistance() const { return render_distance_; }
 
@@ -35,14 +36,35 @@ private:
     void uploadPending(int max_per_frame);
     void evictIfOverBudget();
     void buildMesh(Chunk* chunk);
+    void drainTerrainDone();
+    void processMeshQueue(int max_per_frame);
+    void workerFunc();
 
     IWorld&    world_;
     IRenderer& renderer_;
 
-    // chunk ptr is owned by World; ChunkManager only borrows it
     LRUCache<ChunkPos, Chunk*, ChunkPosHash> loaded_;
-
     std::queue<Chunk*> upload_queue_;
     uint64_t           last_debug_frame_ = 0;
     int                render_distance_  = RENDER_DISTANCE;
+
+    // ── バックグラウンドスレッド（地形生成のみ）──────────────────────────────
+    // メッシュビルドはメインスレッドのみで行い、データ競合を完全に排除する。
+    uint32_t                 world_seed_ = 0;
+    std::vector<std::thread> workers_;
+    std::atomic<bool>        stop_flag_{false};
+
+    // メイン → ワーカー: 地形生成ジョブ
+    std::mutex              gen_mutex_;
+    std::condition_variable gen_cv_;
+    std::queue<ChunkPos>    gen_queue_;
+
+    // ワーカー → メイン: 地形生成完了
+    std::mutex                         terrain_done_mutex_;
+    std::queue<std::unique_ptr<Chunk>> terrain_done_queue_;
+
+    // メインスレッド専用（mutex 不要）
+    std::unordered_set<ChunkPos, ChunkPosHash> gen_in_flight_;
+    // メッシュビルドが必要なチャンク（processMeshQueue で消化）
+    std::unordered_set<ChunkPos, ChunkPosHash> mesh_queue_;
 };

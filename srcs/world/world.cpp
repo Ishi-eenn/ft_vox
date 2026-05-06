@@ -177,18 +177,23 @@ bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// getOrCreateChunk() — チャンクを取得し、なければ生成して追加する
-//
-// 地形生成（TerrainGen::generate）は初回アクセス時だけ実行され、
-// 以降は同じポインタを返す。
+// getChunk() — チャンクを読み取り専用で返す。未生成なら nullptr を返す。
 // ─────────────────────────────────────────────────────────────────────────────
-Chunk* World::getOrCreateChunk(ChunkPos pos) {
+Chunk* World::getChunk(ChunkPos pos) {
     auto it = chunks_.find(pos);
-    if (it != chunks_.end()) return it->second.get();
+    if (it == chunks_.end()) return nullptr;
+    return it->second.get();
+}
 
-    auto chunk = std::make_unique<Chunk>();
-    chunk->pos = pos;
-    gen_.generate(*chunk);  // Perlin ノイズで地形を生成する
+// ─────────────────────────────────────────────────────────────────────────────
+// registerChunk() — ワーカースレッドで生成済みのチャンクをマップに登録する
+//
+// メインスレッドからのみ呼ぶこと。
+// 登録後、水シミュレーションの起動も行う。
+// ─────────────────────────────────────────────────────────────────────────────
+Chunk* World::registerChunk(std::unique_ptr<Chunk> chunk) {
+    ChunkPos pos = chunk->pos;
+    if (chunks_.count(pos)) return chunks_[pos].get();  // 二重登録ガード
 
     Chunk* raw = chunk.get();
     chunks_[pos] = std::move(chunk);
@@ -209,6 +214,23 @@ Chunk* World::getOrCreateChunk(ChunkPos pos) {
     }
 
     return raw;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getOrCreateChunk() — チャンクを取得し、なければ生成して追加する
+//
+// 地形生成（TerrainGen::generate）は初回アクセス時だけ実行され、
+// 以降は同じポインタを返す。
+// ─────────────────────────────────────────────────────────────────────────────
+Chunk* World::getOrCreateChunk(ChunkPos pos) {
+    auto it = chunks_.find(pos);
+    if (it != chunks_.end()) return it->second.get();
+
+    auto chunk = std::make_unique<Chunk>();
+    chunk->pos = pos;
+    gen_.generate(*chunk);  // Perlin ノイズで地形を生成する
+
+    return registerChunk(std::move(chunk));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +264,15 @@ std::vector<WorldPos> World::stepWater(ChunkPos min_chunk, ChunkPos max_chunk) {
     }
     active_water_.clear();
     if (seeds.empty()) return {};
+
+    // 1ステップで処理するシード数を制限し、超過分は次のステップへ持ち越す。
+    // 水が一気に広がっても1フレームの処理量を一定に抑える。
+    constexpr size_t MAX_SEEDS_PER_STEP = 512;
+    if (seeds.size() > MAX_SEEDS_PER_STEP) {
+        for (size_t i = MAX_SEEDS_PER_STEP; i < seeds.size(); ++i)
+            active_water_.insert(seeds[i]);
+        seeds.resize(MAX_SEEDS_PER_STEP);
+    }
 
     // 処理対象の候補集合を作る（各シードの7近傍を追加）
     std::unordered_set<WorldPos, WorldPosHash> candidates;
