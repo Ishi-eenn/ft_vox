@@ -148,7 +148,7 @@ struct Engine::Impl {
 
     BlockType selected_block = BlockType::Stone;  // 現在選択中のブロック種類
     float     time_of_day    = 0.35f;  // 時刻（0=深夜, 0.25=日の出, 0.5=正午, 0.75=日の入り）
-    bool      show_minimap   = true;   // M キーでオン/オフ
+    bool      show_minimap   = false;  // M キーでオン/オフ
 
     ~Impl() { delete chunk_mgr; }
 };
