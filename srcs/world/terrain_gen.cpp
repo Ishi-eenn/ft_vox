@@ -779,12 +779,30 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                 }
 
                 if (t != BlockType::Air && t != BlockType::Water && y > 5) {
-                    float fy = (float)y;
-                    // 縦長洞窟（等方性）と横長洞窟（Y圧縮）のどちらかが閾値を超えれば空洞にする
-                    bool vert  = noise_.getCave     (wx, fy, wz) > 0.62f;
-                    bool horiz = noise_.getCaveHoriz(wx, fy, wz) > 0.65f;
-                    if (vert || horiz)
-                        t = BlockType::Air;
+                    float fy    = (float)y;
+                    float depth = (float)(surface - y);
+
+                    // ── 地表入口層（depth 0〜12）──────────────────────────────
+                    // 等方性の単一ノイズで丸い開口部を作る。
+                    // スパゲッティ方式（2ノイズの交線）は地表で「地割れ」になるため
+                    // ここでは使わず、高閾値の blob 方式で自然な穴形状にする。
+                    if (depth >= 0.0f && depth < 12.0f) {
+                        float ne = noise_.getCaveEntrance(wx, fy, wz);
+                        if (ne > 0.62f)
+                            t = BlockType::Air;
+                    }
+
+                    // ── 地下トンネル層（depth 10以深）─────────────────────────
+                    // スパゲッティ方式（n1²+n2²<threshold）で斜めトンネルを生成。
+                    // 地表入口と depth 10〜12 でオーバーラップし自然に繋がる。
+                    if (depth >= 10.0f && t != BlockType::Air) {
+                        float n1 = noise_.getCave     (wx, fy, wz);
+                        float n2 = noise_.getCaveHoriz(wx, fy, wz);
+                        float fade      = std::min((depth - 10.0f) / 14.0f, 1.0f);
+                        float threshold = 0.006f + fade * 0.012f;  // 0.006 → 0.018
+                        if (n1 * n1 + n2 * n2 < threshold)
+                            t = BlockType::Air;
+                    }
                 }
 
                 chunk.setBlock(x, y, z, t);
