@@ -6,6 +6,7 @@
 #include "renderer/skybox.hpp"
 #include "renderer/title_screen.hpp"
 #include "renderer/minimap.hpp"
+#include "mob/zombie.hpp"
 #include <map>
 #include <cstdint>
 #include <vector>
@@ -33,6 +34,8 @@ public:
     void drawMinimap();
     void drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
                            const float* view4x4, const float* proj4x4);
+    void drawMobs(const std::vector<Zombie>& zombies,
+                  const float* view4x4, const float* proj4x4);
     void endFrame() override;
     void onResize(int w, int h) override;
     void setTimeOfDay(float t);

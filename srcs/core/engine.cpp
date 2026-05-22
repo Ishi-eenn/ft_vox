@@ -30,6 +30,7 @@
 #include "player/player.hpp"
 #include "streaming/chunk_manager.hpp"
 #include "network/client.hpp"
+#include "mob/mob_manager.hpp"
 
 #include <chrono>
 #include <thread>
@@ -152,10 +153,15 @@ struct Engine::Impl {
     float         time_of_day    = 0.35f;
     bool          show_minimap_  = true;
 
-    // Multiplayer — null when running single-player
+    // Multiplayer
     NetworkClient net_client;
     bool          multiplayer   = false;
-    float         net_pos_timer = 0.0f;  // position send interval (~20 Hz)
+    float         net_pos_timer = 0.0f;
+
+    // Mobs
+    MobManager    mob_mgr;
+    float         player_health     = 20.0f;
+    float         player_max_health = 20.0f;
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -413,9 +419,9 @@ void Engine::run() {
                 glm::vec3 front = impl_->player.camera().front();
                 RayHit hit = castRay(pos, front, 6.0f, impl_->world);
 
-                if (hit.hit) {
-                    // 左クリック: 当たったブロックを空気に置き換える（壊す）
-                    if (inp.wasLeftClicked()) {
+                // 左クリック: ブロックを壊す OR ゾンビを攻撃
+                if (inp.wasLeftClicked()) {
+                    if (hit.hit) {
                         impl_->world.setWorldBlock(hit.bx, hit.by, hit.bz,
                                                    BlockType::Air);
                         rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
@@ -423,8 +429,14 @@ void Engine::run() {
                             impl_->net_client.sendBlockChange(
                                 hit.bx, hit.by, hit.bz,
                                 static_cast<uint8_t>(BlockType::Air));
+                    } else {
+                        // ブロックに当たらなかった → 前方のゾンビを攻撃
+                        impl_->mob_mgr.playerMeleeAttack(
+                            pos.x, pos.y, pos.z, front.x, front.z);
                     }
-                    // 右クリック: 当たる直前のマスに選択中ブロックを置く
+                }
+                if (hit.hit) {
+                    // 右クリック: ブロックを置く
                     if (inp.wasRightClicked()) {
                         impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
                                                    impl_->selected_block);
@@ -483,6 +495,22 @@ void Engine::run() {
             }
         }
 
+        // ── モブ更新 ────────────────────────────────────────────────────────
+        {
+            float dmg = impl_->mob_mgr.update(
+                dt,
+                ppos.x, ppos.y, ppos.z,
+                impl_->time_of_day,
+                isSolid,
+                impl_->world);
+            impl_->player_health -= dmg;
+            if (impl_->player_health <= 0) {
+                // シンプルなリスポーン: 体力を全回復
+                impl_->player_health = impl_->player_max_health;
+                fprintf(stderr, "[Game] Player died and respawned.\n");
+            }
+        }
+
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
         // 毎フレーム数チャンクずつ処理し、ゲームが止まらないようにする。
@@ -529,10 +557,13 @@ void Engine::run() {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);
         }
 
-        // リモートプレイヤーをワイヤーフレームボックスで描画
+        // リモートプレイヤーを Steve モデルで描画
         if (impl_->multiplayer)
             impl_->renderer.drawRemotePlayers(
                 impl_->net_client.remotePlayers(), view4x4, proj4x4);
+
+        // モブ（ゾンビ）を描画
+        impl_->renderer.drawMobs(impl_->mob_mgr.zombies(), view4x4, proj4x4);
 
         // パス2: 水（半透明）を描画
         // 深度バッファには書き込まない（読むだけ）。

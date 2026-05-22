@@ -83,6 +83,7 @@ add_executable(
   srcs/network/tcp_socket.cpp
   srcs/network/server.cpp
   srcs/network/client.cpp
+  srcs/mob/mob_manager.cpp
 )
 
 target_include_directories(

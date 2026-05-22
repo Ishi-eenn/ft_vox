@@ -16,6 +16,7 @@
 #include "types.hpp"
 #include "world/world.hpp"
 #include "network/client.hpp"
+#include "mob/zombie.hpp"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -907,6 +908,115 @@ void Renderer::drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
             m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
             m = glm::scale(m, sz);
             drawStevePart(vp * m, m, kJeans);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawMobs() — ゾンビを描画する
+//
+// ゾンビのポーズ（Steve との違い）:
+//   ・胴体を約 20° 前傾させる（hunched）
+//   ・腕を前方約 70° 上げる（zombie arms）
+//   ・皮膚色: 緑がかった灰色
+//   ・胴体: 暗いティール
+//   ・脚: 褐色グレー
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawMobs(const std::vector<Zombie>& zombies,
+                         const float* view4x4, const float* proj4x4) {
+    if (zombies.empty() || !entity_vao_) return;
+
+    static const float kSkin[]  = {0.35f, 0.52f, 0.28f};  // green-grey
+    static const float kShirt[] = {0.13f, 0.22f, 0.18f};  // dark teal
+    static const float kPants[] = {0.22f, 0.18f, 0.14f};  // mud brown
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir",
+                            sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    for (const Zombie& z : zombies) {
+        // Zombie position is already feet. No EYE_H offset needed.
+        // Body faces yaw direction (same convention as camera: yaw-90°).
+        glm::mat4 global = glm::translate(glm::mat4(1.0f),
+                                           glm::vec3(z.x, z.y, z.z));
+        global = glm::rotate(global,
+                              glm::radians(z.yaw - 90.0f),
+                              glm::vec3(0.f, 1.f, 0.f));
+
+        // Walk swing for legs; arms are mostly raised, with smaller swing
+        const float leg_swing = glm::radians(sinf(z.walk_phase) * 28.0f);
+        const float arm_raise = glm::radians(-70.0f);   // zombie arms forward
+        const float arm_swing = glm::radians(sinf(z.walk_phase) * 12.0f);
+
+        // ── Torso: hunched ~20° forward ─────────────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.70f, 0.25f);
+            // Pivot at torso centre for tilt
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 0.975f, 0.f));
+            m = glm::rotate(m, glm::radians(-5.0f), glm::vec3(1.f, 0.f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kShirt);
+        }
+
+        // ── Head: sits on top of hunched torso ──────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.50f, 0.50f);
+            // Offset from torso top, corrected for tilt
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 1.30f, 0.02f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Left Arm: raised forward ~70° ───────────────────────────────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.35f, 1.30f, 0.f));
+            m = glm::rotate(m, arm_raise + arm_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Right Arm: raised forward ~70° (opposite swing) ─────────────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.35f, 1.30f, 0.f));
+            m = glm::rotate(m, arm_raise - arm_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Left Leg ─────────────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.185f, 0.65f, 0.f));
+            m = glm::rotate(m,  leg_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kPants);
+        }
+
+        // ── Right Leg ────────────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.185f, 0.65f, 0.f));
+            m = glm::rotate(m, -leg_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kPants);
         }
     }
 
