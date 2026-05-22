@@ -80,6 +80,9 @@ add_executable(
   srcs/renderer/title_screen.cpp
   srcs/renderer/minimap.cpp
   srcs/renderer/renderer.cpp
+  srcs/network/tcp_socket.cpp
+  srcs/network/server.cpp
+  srcs/network/client.cpp
 )
 
 target_include_directories(

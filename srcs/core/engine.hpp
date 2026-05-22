@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
 
 struct GLFWwindow;
 
@@ -10,6 +11,9 @@ public:
     ~Engine();
 
     bool init(uint32_t seed, int width = 1280, int height = 720);
+    // Optionally call before run() to connect to a multiplayer server.
+    // host: IP address string, port: TCP port.
+    bool connectToServer(const char* host, uint16_t port);
     void run();
     void shutdown();
 
@@ -24,7 +28,6 @@ private:
     uint64_t    frame_    = 0;
     bool        running_  = false;
 
-    // Filled in by integration agent (engine.cpp)
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

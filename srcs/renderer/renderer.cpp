@@ -15,6 +15,7 @@
 #include "renderer/renderer.hpp"
 #include "types.hpp"
 #include "world/world.hpp"
+#include "network/client.hpp"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -41,6 +42,9 @@ Renderer::~Renderer() {
     chunk_shader_.destroy();
     sky_shader_.destroy();
     hud_shader_.destroy();
+    entity_shader_.destroy();
+    if (entity_vao_)  { glDeleteVertexArrays(1, &entity_vao_);  entity_vao_  = 0; }
+    if (entity_vbo_)  { glDeleteBuffers(1, &entity_vbo_);       entity_vbo_  = 0; }
     if (hud_vao_)     { glDeleteVertexArrays(1, &hud_vao_);     hud_vao_     = 0; }
     if (hud_vbo_)     { glDeleteBuffers(1, &hud_vbo_);          hud_vbo_     = 0; }
     if (overlay_vao_) { glDeleteVertexArrays(1, &overlay_vao_); overlay_vao_ = 0; }
@@ -108,6 +112,42 @@ bool Renderer::init(GLFWwindow* window) {
     if (!minimap_.init()) {
         std::cerr << "[Renderer] Failed to initialise minimap\n";
         return false;
+    }
+
+    // ── エンティティ（リモートプレイヤー）シェーダーと VAO ────────────────────
+    if (!entity_shader_.load("assets/shaders/entity.vert",
+                              "assets/shaders/entity.frag")) {
+        std::cerr << "[Renderer] Failed to load entity shaders\n";
+        return false;
+    }
+    {
+        // Wireframe box for a player: 0.6 wide × 1.8 tall, origin at feet.
+        static constexpr float HW = 0.30f, H = 1.80f;
+        static const float verts[] = {
+            // bottom face
+            -HW,  0,  -HW,   HW,  0,  -HW,
+             HW,  0,  -HW,   HW,  0,   HW,
+             HW,  0,   HW,  -HW,  0,   HW,
+            -HW,  0,   HW,  -HW,  0,  -HW,
+            // top face
+            -HW,  H,  -HW,   HW,  H,  -HW,
+             HW,  H,  -HW,   HW,  H,   HW,
+             HW,  H,   HW,  -HW,  H,   HW,
+            -HW,  H,   HW,  -HW,  H,  -HW,
+            // vertical edges
+            -HW,  0,  -HW,  -HW,  H,  -HW,
+             HW,  0,  -HW,   HW,  H,  -HW,
+             HW,  0,   HW,   HW,  H,   HW,
+            -HW,  0,   HW,  -HW,  H,   HW,
+        };
+        glGenVertexArrays(1, &entity_vao_);
+        glGenBuffers(1, &entity_vbo_);
+        glBindVertexArray(entity_vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, entity_vbo_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), nullptr);
+        glBindVertexArray(0);
     }
 
     return true;
@@ -713,4 +753,46 @@ void Renderer::setTimeOfDay(float t) {
 
     // 太陽が水平線より下のときは拡散光（太陽光）を出さない
     if (elev < 0.0f) sun_strength_ = 0.0f;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawRemotePlayers() — 他プレイヤーをワイヤーフレームボックスで描画する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
+                                  const float* view4x4, const float* proj4x4) {
+    if (players.empty() || !entity_vao_) return;
+
+    // Player colors cycle through a small palette (index = player_id % 6).
+    static const float kColors[][3] = {
+        {1.0f, 0.3f, 0.3f},  // red
+        {0.3f, 1.0f, 0.3f},  // green
+        {0.3f, 0.5f, 1.0f},  // blue
+        {1.0f, 1.0f, 0.3f},  // yellow
+        {1.0f, 0.5f, 0.0f},  // orange
+        {0.8f, 0.3f, 1.0f},  // purple
+    };
+
+    glm::mat4 view = glm::make_mat4(view4x4);
+    glm::mat4 proj = glm::make_mat4(proj4x4);
+
+    entity_shader_.use();
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    for (auto& [id, rp] : players) {
+        // Position received is the camera (eye) position; feet = y - 1.62.
+        static constexpr float EYE_H = 1.62f;
+        glm::mat4 model = glm::translate(glm::mat4(1.0f),
+                                          glm::vec3(rp.x, rp.y - EYE_H, rp.z));
+        glm::mat4 mvp = proj * view * model;
+        entity_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+
+        const float* col = kColors[id % 6];
+        entity_shader_.setVec3("uColor", col[0], col[1], col[2]);
+
+        glDrawArrays(GL_LINES, 0, 24);
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
 }

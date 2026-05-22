@@ -29,8 +29,10 @@
 #include "world/world.hpp"
 #include "player/player.hpp"
 #include "streaming/chunk_manager.hpp"
+#include "network/client.hpp"
 
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -146,9 +148,14 @@ struct Engine::Impl {
     Player        player;      // プレイヤー移動・物理担当
     ChunkManager* chunk_mgr = nullptr;  // チャンクの読み込み・破棄担当
 
-    BlockType selected_block = BlockType::Stone;  // 現在選択中のブロック種類
-    float     time_of_day    = 0.35f;  // 時刻（0=深夜, 0.25=日の出, 0.5=正午, 0.75=日の入り）
-    bool      show_minimap_  = true;   // M キーでトグル
+    BlockType     selected_block = BlockType::Stone;
+    float         time_of_day    = 0.35f;
+    bool          show_minimap_  = true;
+
+    // Multiplayer — null when running single-player
+    NetworkClient net_client;
+    bool          multiplayer   = false;
+    float         net_pos_timer = 0.0f;  // position send interval (~20 Hz)
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -156,6 +163,32 @@ struct Engine::Impl {
 // ─────────────────────────────────────────────────────────────────────────────
 Engine::Engine()  : impl_(std::make_unique<Impl>()) {}
 Engine::~Engine() { shutdown(); }
+
+bool Engine::connectToServer(const char* host, uint16_t port) {
+    if (!impl_->net_client.connect(host, port)) {
+        fprintf(stderr, "[Engine] Failed to connect to %s:%u\n", host, port);
+        return false;
+    }
+    // Wait briefly for WELCOME packet (server sends it synchronously on connect).
+    // poll() a few times to receive it before the game loop starts.
+    for (int i = 0; i < 50 && !impl_->net_client.isConnected(); ++i) {
+        std::vector<NetworkEvent> ev;
+        impl_->net_client.poll(ev);
+        // short busy-wait; acceptable once at startup
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(10ms);
+    }
+    if (!impl_->net_client.isConnected()) {
+        fprintf(stderr, "[Engine] Did not receive WELCOME from server\n");
+        return false;
+    }
+    // Override world seed so terrain matches server's world.
+    impl_->world.setSeed(impl_->net_client.seed());
+    impl_->multiplayer = true;
+    fprintf(stderr, "[Engine] Multiplayer ready  seed=%u\n",
+            impl_->net_client.seed());
+    return true;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // init() — ウィンドウ・OpenGL・各システムの初期化
@@ -386,12 +419,20 @@ void Engine::run() {
                         impl_->world.setWorldBlock(hit.bx, hit.by, hit.bz,
                                                    BlockType::Air);
                         rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
+                        if (impl_->multiplayer)
+                            impl_->net_client.sendBlockChange(
+                                hit.bx, hit.by, hit.bz,
+                                static_cast<uint8_t>(BlockType::Air));
                     }
                     // 右クリック: 当たる直前のマスに選択中ブロックを置く
                     if (inp.wasRightClicked()) {
                         impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
                                                    impl_->selected_block);
                         rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                        if (impl_->multiplayer)
+                            impl_->net_client.sendBlockChange(
+                                hit.nx, hit.ny, hit.nz,
+                                static_cast<uint8_t>(impl_->selected_block));
                     }
                 }
             }
@@ -405,10 +446,31 @@ void Engine::run() {
         // レンダラーに時刻を伝え、空の色・太陽方向・光の強さを更新してもらう
         impl_->renderer.setTimeOfDay(impl_->time_of_day);
 
+        // ── マルチプレイ: ネットワーク送受信 ────────────────────────────────────
+        glm::vec3 ppos = impl_->player.camera().position();
+        if (impl_->multiplayer) {
+            impl_->net_pos_timer += dt;
+            if (impl_->net_pos_timer >= 0.05f) {   // ~20 Hz
+                impl_->net_pos_timer = 0.0f;
+                impl_->net_client.updatePosition(
+                    ppos.x, ppos.y, ppos.z,
+                    impl_->player.camera().getYaw(),
+                    impl_->player.camera().getPitch());
+            }
+            std::vector<NetworkEvent> events;
+            impl_->net_client.poll(events);
+            for (auto& ev : events) {
+                if (ev.kind == NetworkEvent::Kind::BlockChange) {
+                    auto bt = static_cast<BlockType>(ev.block_type);
+                    impl_->world.setWorldBlock(ev.bx, ev.by, ev.bz, bt);
+                    rebuildModified(ev.bx, ev.bz, *impl_->chunk_mgr);
+                }
+            }
+        }
+
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
         // 毎フレーム数チャンクずつ処理し、ゲームが止まらないようにする。
-        glm::vec3 ppos = impl_->player.camera().position();
         impl_->chunk_mgr->update(ppos.x, ppos.z, frame_);
 
         // ── 行列の計算 ───────────────────────────────────────────────────────
@@ -451,6 +513,11 @@ void Engine::run() {
         for (Chunk* c : visible) {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);
         }
+
+        // リモートプレイヤーをワイヤーフレームボックスで描画
+        if (impl_->multiplayer)
+            impl_->renderer.drawRemotePlayers(
+                impl_->net_client.remotePlayers(), view4x4, proj4x4);
 
         // パス2: 水（半透明）を描画
         // 深度バッファには書き込まない（読むだけ）。

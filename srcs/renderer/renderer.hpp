@@ -6,10 +6,13 @@
 #include "renderer/skybox.hpp"
 #include "renderer/title_screen.hpp"
 #include "renderer/minimap.hpp"
+#include <map>
+#include <cstdint>
 #include <vector>
 
 struct GLFWwindow;
 class World;
+struct RemotePlayer;
 
 class Renderer : public IRenderer {
 public:
@@ -30,6 +33,8 @@ public:
     // Update the minimap texture from world data, then render it
     void updateMinimap(World& world, float px, float pz, float yaw_deg, float dt);
     void drawMinimap();
+    void drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
+                           const float* view4x4, const float* proj4x4);
     void endFrame() override;
     void onResize(int w, int h) override;
 
@@ -51,6 +56,9 @@ private:
     Shader       chunk_shader_;
     Shader       sky_shader_;
     Shader       hud_shader_;
+    Shader       entity_shader_;
+    uint32_t     entity_vao_ = 0;
+    uint32_t     entity_vbo_ = 0;
     TextureAtlas atlas_;
     Skybox       skybox_;
     Frustum      frustum_;
