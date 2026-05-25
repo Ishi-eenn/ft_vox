@@ -170,7 +170,11 @@ ChunkPos World::worldToChunk(int wx, int wz) {
 
 // 固体ブロック判定（空気と水以外は固体）
 bool World::isSolidBlock(BlockType type) const {
-    return type != BlockType::Air && type != BlockType::Water;
+    return type != BlockType::Air
+        && type != BlockType::Water
+        && type != BlockType::ShortGrass
+        && type != BlockType::Flower
+        && type != BlockType::Mushroom;
 }
 
 // チャンク座標が指定範囲内に入っているか判定（水シミュレーション範囲の絞り込みに使う）

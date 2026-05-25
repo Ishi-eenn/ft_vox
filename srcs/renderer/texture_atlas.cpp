@@ -453,6 +453,90 @@ static void fillOre(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
     }
 }
 
+static void fillShortGrassPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int from_bottom = tw - 1 - py;
+            int h1 = 5 + (hash2(px, 0, 911) % 8);
+            int h2 = 4 + (hash2(px, 0, 977) % 6);
+            bool blade = ((px % 4 == 1 || px % 7 == 2) && from_bottom < h1)
+                      || ((px + py) % 9 == 0 && from_bottom < h2);
+            if (!blade) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            int n = hash2(px, py, 941);
+            setPixel(buf, atlas_w, ox, oy, px, py,
+                     50 + (n % 20), 126 + (n % 46), 32 + (n % 18));
+        }
+    }
+}
+
+static void fillFlowerPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            bool stem = (px == 7 || px == 8) && py >= 5;
+            bool leaf = (py >= 9 && py <= 12 && (px == 5 || px == 10));
+            int dx = px - 7;
+            int dy = py - 4;
+            bool petal = dx * dx + dy * dy <= 9
+                      || ((px - 5) * (px - 5) + (py - 5) * (py - 5) <= 4)
+                      || ((px - 10) * (px - 10) + (py - 5) * (py - 5) <= 4);
+            if (!stem && !leaf && !petal) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            if (petal) {
+                int n = hash2(px, py, 1013);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         210 + (n % 35), 52 + (n % 34), 60 + (n % 48));
+            } else {
+                int n = hash2(px, py, 1021);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         45 + (n % 18), 128 + (n % 40), 38 + (n % 20));
+            }
+        }
+    }
+}
+
+static void fillMushroomPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            bool stem = (px >= 6 && px <= 9 && py >= 7 && py <= 14);
+            int dx = px - 7;
+            int dy = py - 5;
+            bool cap = (dx * dx * 2 + dy * dy * 3 <= 38) && py <= 8;
+            if (!stem && !cap) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            if (cap) {
+                bool spot = ((px - 5) * (px - 5) + (py - 5) * (py - 5) <= 2)
+                         || ((px - 10) * (px - 10) + (py - 4) * (py - 4) <= 2);
+                int n = hash2(px, py, 1103);
+                if (spot)
+                    setPixel(buf, atlas_w, ox, oy, px, py, 226, 214, 184);
+                else
+                    setPixel(buf, atlas_w, ox, oy, px, py,
+                             146 + (n % 36), 48 + (n % 24), 38 + (n % 18));
+            } else {
+                int n = hash2(px, py, 1117);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         184 + (n % 32), 160 + (n % 28), 126 + (n % 22));
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -484,6 +568,9 @@ bool TextureAtlas::generate() {
     fillGrassSide(pixels, atlas_w, 2, 1);            // GrassSide (col=2, row=1) tile=10
     fillOre      (pixels, atlas_w, 3, 1, 214, 174,  48, 701); // GoldOre    tile=11
     fillOre      (pixels, atlas_w, 4, 1,  68, 218, 224, 809); // DiamondOre tile=12
+    fillShortGrassPlant(pixels, atlas_w, 5, 1);      // ShortGrass tile=13
+    fillFlowerPlant    (pixels, atlas_w, 6, 1);      // Flower     tile=14
+    fillMushroomPlant  (pixels, atlas_w, 7, 1);      // Mushroom   tile=15
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);

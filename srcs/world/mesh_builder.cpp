@@ -78,6 +78,73 @@ static void getAtlasUV(BlockType type, Face face, float& u0, float& v0, float& u
     vh = 1.0f / (float)rows;  // 1タイルのV高さ
 }
 
+static bool isDecorativePlant(BlockType type) {
+    return type == BlockType::ShortGrass ||
+           type == BlockType::Flower ||
+           type == BlockType::Mushroom;
+}
+
+static bool isFaceTransparent(BlockType type) {
+    return type == BlockType::Air ||
+           type == BlockType::Water ||
+           isDecorativePlant(type);
+}
+
+static float plantHeight(BlockType type) {
+    if (type == BlockType::Mushroom) return 0.55f;
+    if (type == BlockType::Flower)   return 0.85f;
+    return 0.72f;
+}
+
+static void addPlantQuad(std::vector<Vertex>& verts,
+                         std::vector<uint32_t>& indices,
+                         const float p[4][3],
+                         float u0, float v0, float uw, float vh) {
+    static const float uv[4][2] = {
+        {0.0f, 1.0f}, {1.0f, 1.0f}, {1.0f, 0.0f}, {0.0f, 0.0f}
+    };
+
+    uint32_t b = (uint32_t)verts.size();
+    for (int i = 0; i < 4; ++i) {
+        Vertex v{};
+        v.x = p[i][0]; v.y = p[i][1]; v.z = p[i][2];
+        v.u = u0 + uv[i][0] * uw;
+        v.v = v0 + uv[i][1] * vh;
+        v.nx = 0.0f; v.ny = 1.0f; v.nz = 0.0f;
+        verts.push_back(v);
+    }
+
+    // 両面から見えるよう、同じ板を表裏両方向の巻き順で描く。
+    indices.insert(indices.end(), {b, b+1, b+2, b, b+2, b+3,
+                                   b, b+2, b+1, b, b+3, b+2});
+}
+
+static void addPlantCross(std::vector<Vertex>& verts,
+                          std::vector<uint32_t>& indices,
+                          int x, int y, int z,
+                          BlockType type) {
+    float u0, v0, uw, vh;
+    getAtlasUV(type, Face::North, u0, v0, uw, vh);
+
+    const float h = plantHeight(type);
+    const float inset = 0.14f;
+    const float x0 = (float)x + inset;
+    const float x1 = (float)x + 1.0f - inset;
+    const float z0 = (float)z + inset;
+    const float z1 = (float)z + 1.0f - inset;
+    const float y0 = (float)y;
+    const float y1 = (float)y + h;
+
+    const float q0[4][3] = {
+        {x0, y0, z0}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z0}
+    };
+    const float q1[4][3] = {
+        {x1, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x1, y1, z0}
+    };
+    addPlantQuad(verts, indices, q0, u0, v0, uw, vh);
+    addPlantQuad(verts, indices, q1, u0, v0, uw, vh);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // getNeighborBlock() — チャンク境界をまたいで隣ブロックの種類を取得
 //
@@ -298,6 +365,11 @@ void MeshBuilder::build(Chunk& chunk, const ChunkNeighbors& neighbors) {
                 BlockType t = chunk.getBlock(x, y, z);
                 if (t == BlockType::Air) continue;  // 空気は面を持たない
 
+                if (isDecorativePlant(t)) {
+                    addPlantCross(chunk.vertices, chunk.indices, x, y, z, t);
+                    continue;
+                }
+
                 // 6面それぞれについて面を生成するか判断
                 for (int f = 0; f < 6; ++f) {
                     int nx = x + DX[f];
@@ -335,11 +407,11 @@ void MeshBuilder::build(Chunk& chunk, const ChunkNeighbors& neighbors) {
                                     addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                                 }
                             }
-                        } else if (nb == BlockType::Air) {
+                        } else if (nb == BlockType::Air || isDecorativePlant(nb)) {
                             // 下面など: 隣が空気なら生成
                             addFace(chunk.vertices, chunk.indices_water, x, y, z, (Face)f, t, chunk, neighbors);
                         }
-                    } else if (nb == BlockType::Air || nb == BlockType::Water) {
+                    } else if (isFaceTransparent(nb)) {
                         // 不透明ブロック: 隣が空気か水なら面を生成（不透明インデックスリストに追加）
                         addFace(chunk.vertices, chunk.indices, x, y, z, (Face)f, t, chunk, neighbors);
                     }

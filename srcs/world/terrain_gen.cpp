@@ -149,6 +149,21 @@ static bool canPlaceCactusAt(const Chunk& chunk, int x, int z, int surface) {
     return true;
 }
 
+static bool canPlaceDecorativeAt(const Chunk& chunk, int x, int z, int surface,
+                                 bool allow_dirt = false) {
+    if (x < 0 || x >= CHUNK_SIZE_X || z < 0 || z >= CHUNK_SIZE_Z) return false;
+    if (surface < SEA_LEVEL + 1 || surface + 1 >= CHUNK_SIZE_Y) return false;
+    BlockType ground = chunk.getBlock(x, surface, z);
+    if (ground != BlockType::Grass && !(allow_dirt && ground == BlockType::Dirt))
+        return false;
+    return chunk.getBlock(x, surface + 1, z) == BlockType::Air;
+}
+
+static void placeDecorative(Chunk& chunk, int x, int z, int surface, BlockType type) {
+    if (surface + 1 < CHUNK_SIZE_Y)
+        chunk.setBlock(x, surface + 1, z, type);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // placeTree() — 木を1本生成する
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1190,22 +1205,38 @@ void TerrainGenerator::generate(Chunk& chunk) const {
             if (wSw > 0.40f) {
                 if ((chance % 100u) < 8u && canPlaceTreeAt(chunk, x, z, surface, /*allow_dirt=*/true))
                     placeSwampTree(chunk, x, z, surface, seed_);
+                else if ((chance >> 8) % 100u < 2u &&
+                         canPlaceDecorativeAt(chunk, x, z, surface, /*allow_dirt=*/true))
+                    placeDecorative(chunk, x, z, surface, BlockType::Mushroom);
+                else if ((chance >> 16) % 100u < 10u &&
+                         canPlaceDecorativeAt(chunk, x, z, surface, /*allow_dirt=*/true))
+                    placeDecorative(chunk, x, z, surface, BlockType::ShortGrass);
                 continue;
             }
 
             // ── 寒冷バイオーム: 松（針葉樹）──────────────────────────────
             if ((wT + wR) > 0.45f) {
-                if (!canPlaceTreeAt(chunk, x, z, surface)) continue;
-                if ((chance % 100u) < 9u)
+                if ((chance % 100u) < 9u && canPlaceTreeAt(chunk, x, z, surface))
                     placePineTree(chunk, x, z, surface, seed_);
+                else if ((chance >> 8) % 100u < 1u &&
+                         canPlaceDecorativeAt(chunk, x, z, surface))
+                    placeDecorative(chunk, x, z, surface, BlockType::Mushroom);
+                else if ((chance >> 16) % 100u < 6u &&
+                         canPlaceDecorativeAt(chunk, x, z, surface))
+                    placeDecorative(chunk, x, z, surface, BlockType::ShortGrass);
                 continue;
             }
 
             // ── 平原: オーク（広葉樹）────────────────────────────────────
             if ((wP + wT) < 0.30f) continue;  // 岩山は木が少ない
-            if (!canPlaceTreeAt(chunk, x, z, surface)) continue;
-            if ((chance % 100u) < 7u)
+            if ((chance % 100u) < 7u && canPlaceTreeAt(chunk, x, z, surface))
                 placeTree(chunk, x, z, surface, seed_);
+            else if ((chance >> 8) % 100u < 2u &&
+                     canPlaceDecorativeAt(chunk, x, z, surface))
+                placeDecorative(chunk, x, z, surface, BlockType::Flower);
+            else if ((chance >> 16) % 100u < 16u &&
+                     canPlaceDecorativeAt(chunk, x, z, surface))
+                placeDecorative(chunk, x, z, surface, BlockType::ShortGrass);
         }
     }
 

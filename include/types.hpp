@@ -18,6 +18,9 @@ enum class BlockType : uint8_t {
     Cactus = 9,
     GoldOre = 11,
     DiamondOre = 12,
+    ShortGrass = 13,
+    Flower = 14,
+    Mushroom = 15,
     COUNT
 };
 

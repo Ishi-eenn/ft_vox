@@ -43,7 +43,9 @@ int MobManager::findGroundY(float x, float z, const World& world) const {
     const int bz = (int)std::floor(z);
     for (int y = 200; y >= 0; --y) {
         BlockType bt = world.getWorldBlock(bx, y, bz);
-        if (bt != BlockType::Air && bt != BlockType::Water)
+        if (bt != BlockType::Air && bt != BlockType::Water &&
+            bt != BlockType::ShortGrass && bt != BlockType::Flower &&
+            bt != BlockType::Mushroom)
             return y + 1;
     }
     return -1;

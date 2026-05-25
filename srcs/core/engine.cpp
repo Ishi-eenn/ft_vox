@@ -144,7 +144,8 @@ static void rebuildModified(int wx, int wz, ChunkManager& mgr) {
 
 // ブロックをインベントリに1個追加する。既存スタックに積む → 空きスロットを探す。
 static void inventoryAdd(Inventory& inv, BlockType type) {
-    if (type == BlockType::Air || type == BlockType::Water) return;
+    if (type == BlockType::Air || type == BlockType::Water ||
+        type == BlockType::ShortGrass) return;
     for (int i = 0; i < HOTBAR_SIZE; ++i) {
         if (inv.slots[i].type == type && inv.slots[i].count < STACK_MAX) {
             ++inv.slots[i].count;
@@ -389,7 +390,11 @@ void Engine::run() {
         // プレイヤーのAABB（当たり判定の箱）が固体ブロックにめり込まないように使う。
         auto isSolid = [&](int x, int y, int z) {
             BlockType t = impl_->world.getWorldBlock(x, y, z);
-            return t != BlockType::Air && t != BlockType::Water;
+            return t != BlockType::Air
+                && t != BlockType::Water
+                && t != BlockType::ShortGrass
+                && t != BlockType::Flower
+                && t != BlockType::Mushroom;
         };
         // isWater: 「このブロックは水か？」を調べる関数。
         // 水中では重力・移動速度が変わる。
