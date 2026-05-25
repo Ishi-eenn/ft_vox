@@ -389,6 +389,54 @@ void Renderer::appendLetter(float* verts, int& count, char letter,
     const float mid   = top - h * 0.5f;
     const float bot   = top - h;
     switch (letter) {
+        case 'P':
+            appendLine(verts, count, left,  top, right, top);
+            appendLine(verts, count, left,  mid, right, mid);
+            appendLine(verts, count, left,  top, left,  bot);
+            appendLine(verts, count, right, top, right, mid);
+            break;
+        case 'A':
+            appendLine(verts, count, left,  bot, left,  mid);
+            appendLine(verts, count, right, bot, right, mid);
+            appendLine(verts, count, left,  mid, (left + right) * 0.5f, top);
+            appendLine(verts, count, right, mid, (left + right) * 0.5f, top);
+            appendLine(verts, count, left + w * 0.25f, mid, right - w * 0.25f, mid);
+            break;
+        case 'E':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right * 0.92f + left * 0.08f, mid);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'L':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'R':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, right, top, right, mid);
+            appendLine(verts, count, left + w * 0.4f, mid, right, bot);
+            break;
+        case 'S':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, top, left, mid);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, right, mid, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'O':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            appendLine(verts, count, left, top, left, bot);
+            break;
+        case 'U':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
         case 'X':
             appendLine(verts, count, left, top,   right, bot);   // 左上→右下
             appendLine(verts, count, right, top,  left,  bot);   // 右上→左下
@@ -502,6 +550,104 @@ void Renderer::drawHud(int fps, int px, int py, int pz) {
     glDisable(GL_DEPTH_TEST);  // HUD は常に最前面に表示
     hud_shader_.use();
     hud_shader_.setVec4("uColor", 1.0f, 1.0f, 1.0f, 0.9f);  // 白色
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawPlayerList() — 接続中プレイヤーID一覧を表示する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawPlayerList(uint8_t local_id,
+                              const std::map<uint8_t, RemotePlayer>& players,
+                              bool multiplayer) {
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
+    std::vector<uint8_t> ids;
+    ids.push_back(local_id == 0 ? 1 : local_id);
+    if (multiplayer) {
+        for (const auto& [id, _] : players) {
+            if (id != ids.front()) ids.push_back(id);
+            if (ids.size() >= 8) break;
+        }
+    }
+
+    const float panel_w = 190.0f / hw;
+    const float panel_h = (72.0f + 28.0f * static_cast<float>(ids.size())) / hh;
+    const float x0 = 1.0f - panel_w - 24.0f / hw;
+    const float y1 = 1.0f - 44.0f / hh;
+    const float x1 = x0 + panel_w;
+    const float y0 = y1 - panel_h;
+
+    auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
+                        float r, float g, float b, float a) {
+        float q[12] = {
+            qx0, qy0, qx1, qy0, qx1, qy1,
+            qx0, qy0, qx1, qy1, qx0, qy1
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(q), q);
+        hud_shader_.setVec4("uColor", r, g, b, a);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+
+    // Panel base and accent strip.
+    drawQuad(x0, y0, x1, y1, 0.02f, 0.03f, 0.04f, 0.62f);
+    drawQuad(x0, y1 - 4.0f / hh, x1, y1, 0.18f, 0.78f, 0.95f, 0.85f);
+
+    // Row backgrounds and status chips.
+    for (size_t i = 0; i < ids.size(); ++i) {
+        float top = y1 - (46.0f + 28.0f * static_cast<float>(i)) / hh;
+        float bot = top - 22.0f / hh;
+        float tint = (i == 0) ? 0.15f : 0.08f;
+        drawQuad(x0 + 10.0f / hw, bot, x1 - 10.0f / hw, top,
+                 tint, tint + 0.02f, tint + 0.03f, 0.55f);
+        drawQuad(x0 + 16.0f / hw, bot + 5.0f / hh,
+                 x0 + 24.0f / hw, top - 5.0f / hh,
+                 i == 0 ? 0.35f : 0.20f,
+                 i == 0 ? 0.95f : 0.75f,
+                 i == 0 ? 0.70f : 0.95f,
+                 0.95f);
+    }
+    glBindVertexArray(0);
+
+    std::array<float, 2048> verts{};
+    int count = 0;
+
+    auto appendWord = [&](const char* word, float x, float y, float w, float h, float gap) {
+        for (int i = 0; word[i] != '\0'; ++i) {
+            appendLetter(verts.data(), count, word[i], x, y, w, h);
+            x += w + gap;
+        }
+    };
+
+    const float lw = 9.0f / hw;
+    const float lh = 14.0f / hh;
+    const float gap = 4.0f / hw;
+
+    appendWord("PLAYERS", x0 + 14.0f / hw, y1 - 16.0f / hh, lw, lh, gap);
+    appendNumber(verts.data(), count, static_cast<int>(ids.size()),
+                 x1 - 18.0f / hw, y1 - 16.0f / hh, lw, lh, gap);
+
+    for (size_t i = 0; i < ids.size(); ++i) {
+        float y = y1 - (52.0f + 28.0f * static_cast<float>(i)) / hh;
+        float x = x0 + 34.0f / hw;
+        appendLetter(verts.data(), count, 'P', x, y, lw, lh);
+        x += lw + gap;
+        appendNumber(verts.data(), count, ids[i], x + 20.0f / hw, y, lw, lh, gap);
+        if (i == 0) appendWord("YOU", x1 - 50.0f / hw, y, lw, lh, gap);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
+
+    hud_shader_.setVec4("uColor", 0.92f, 0.98f, 1.0f, 0.92f);
     glBindVertexArray(hud_vao_);
     glDrawArrays(GL_LINES, 0, count / 2);
     glBindVertexArray(0);
@@ -882,6 +1028,12 @@ static void setChunkLightingUniforms(Shader& shader,
     shader.setFloat("uSunStrength", sun_strength);
 }
 
+static void setChunkFogUniforms(Shader& shader, const float sky_horizon[3]) {
+    shader.setVec3 ("uFogColor",  sky_horizon[0], sky_horizon[1], sky_horizon[2]);
+    shader.setFloat("uFogStart",  170.0f);
+    shader.setFloat("uFogEnd",    310.0f);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // drawChunk() — 不透明チャンクを描画する（パス1）
 //
@@ -902,8 +1054,10 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP",          glm::value_ptr(mvp));
     chunk_shader_.setMat4("uModel",        glm::value_ptr(model));
+    chunk_shader_.setMat4("uView",         view4x4);
     chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
+    setChunkFogUniforms(chunk_shader_, sky_horizon_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
 
     atlas_.bind(0);
@@ -953,8 +1107,10 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
     chunk_shader_.use();
     chunk_shader_.setMat4("uMVP",          glm::value_ptr(mvp));
     chunk_shader_.setMat4("uModel",        glm::value_ptr(model));
+    chunk_shader_.setMat4("uView",         view4x4);
     chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
+    setChunkFogUniforms(chunk_shader_, sky_horizon_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
 
     atlas_.bind(0);

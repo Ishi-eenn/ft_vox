@@ -184,6 +184,7 @@ struct Engine::Impl {
     Inventory     inventory;
     float         time_of_day    = 0.35f;
     bool          show_minimap_  = true;
+    bool          show_player_list_ = false;
 
     // Multiplayer
     NetworkClient net_client;
@@ -416,6 +417,16 @@ void Engine::run() {
             bool cur_m = inp.isHeld(GLFW_KEY_M);
             if (cur_m && !prev_m) impl_->show_minimap_ = !impl_->show_minimap_;
             prev_m = cur_m;
+        }
+
+        // ── Tab キー: 接続中プレイヤー一覧表示切り替え ───────────────────────
+        {
+            InputHandler& inp = impl_->player.input();
+            static bool prev_tab = false;
+            bool cur_tab = inp.isHeld(GLFW_KEY_TAB);
+            if (cur_tab && !prev_tab)
+                impl_->show_player_list_ = !impl_->show_player_list_;
+            prev_tab = cur_tab;
         }
 
         // ── ホットバー選択・ブロック操作 ─────────────────────────────────────
@@ -668,6 +679,13 @@ void Engine::run() {
                                 (int)std::floor(ppos.x),
                                 (int)std::floor(ppos.y),
                                 (int)std::floor(ppos.z));
+
+        if (impl_->show_player_list_) {
+            impl_->renderer.drawPlayerList(
+                impl_->net_client.playerId(),
+                impl_->net_client.remotePlayers(),
+                impl_->multiplayer);
+        }
 
         // ホットバー（画面下中央）を描画
         impl_->renderer.drawHotbar(impl_->inventory);

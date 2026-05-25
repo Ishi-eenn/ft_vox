@@ -32,6 +32,9 @@ public:
     void drawClouds(const float* view4x4, const float* proj4x4,
                     float cam_x, float cam_z, float elapsed_s);
     void drawHud(int fps, int px, int py, int pz);
+    void drawPlayerList(uint8_t local_id,
+                        const std::map<uint8_t, RemotePlayer>& players,
+                        bool multiplayer);
     void drawHotbar(const Inventory& inv);
     void drawUnderwaterOverlay();
     bool drawTitleScreen(float dt);

@@ -3,12 +3,14 @@ in vec2  vUV;
 in float vLight;
 in float vLightShadow;
 in vec4  vShadowCoord;
+in float vFogFactor;
 
 uniform sampler2D uAtlas;
 uniform sampler2D uShadowMap;
 uniform sampler2D uSSAOMap;
 uniform float     uSunStrength;  // 0のとき(夜)は影判定をスキップ
 uniform vec2      uScreenSize;
+uniform vec3      uFogColor;
 
 out vec4 FragColor;
 
@@ -60,5 +62,7 @@ void main() {
     float sun_direct = vLight - vLightShadow;
     float light = vLightShadow * ssao + sun_direct * shadowFactor;
 
-    FragColor = vec4(col.rgb * light, col.a);
+    vec3 lit = col.rgb * light;
+    vec3 fogged = mix(lit, uFogColor, clamp(vFogFactor, 0.0, 1.0));
+    FragColor = vec4(fogged, col.a);
 }
