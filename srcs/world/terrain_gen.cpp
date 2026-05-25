@@ -862,6 +862,70 @@ static void placeVillage(Chunk& chunk, const NoiseGen& noise, uint32_t seed,
     }
 }
 
+struct OreClusterSpec {
+    BlockType type;
+    int grid;
+    int min_y;
+    int max_y;
+    int chance_percent;
+    int min_radius_xz;
+    int radius_xz_span;
+    int min_radius_y;
+    int radius_y_span;
+    uint32_t salt;
+};
+
+static int oreCell(int v, int grid) {
+    return (int)std::floor((float)v / (float)grid);
+}
+
+static bool inOreCluster(int wx, int wy, int wz, uint32_t seed,
+                         const OreClusterSpec& spec) {
+    if (wy < spec.min_y || wy > spec.max_y) return false;
+
+    int base_cx = oreCell(wx, spec.grid);
+    int base_cz = oreCell(wz, spec.grid);
+    for (int cz = base_cz - 1; cz <= base_cz + 1; ++cz) {
+        for (int cx = base_cx - 1; cx <= base_cx + 1; ++cx) {
+            uint32_t h = hash3(cx, (int)(seed ^ spec.salt), cz);
+            if ((int)(h % 100u) >= spec.chance_percent) continue;
+
+            int cy_range = spec.max_y - spec.min_y + 1;
+            int center_x = cx * spec.grid + (int)((h >> 8) % (uint32_t)spec.grid);
+            int center_z = cz * spec.grid + (int)((h >> 16) % (uint32_t)spec.grid);
+            int center_y = spec.min_y + (int)((h >> 24) % (uint32_t)cy_range);
+
+            int rx = spec.min_radius_xz + (int)((h >>  3) % (uint32_t)spec.radius_xz_span);
+            int rz = spec.min_radius_xz + (int)((h >> 11) % (uint32_t)spec.radius_xz_span);
+            int ry = spec.min_radius_y  + (int)((h >> 19) % (uint32_t)spec.radius_y_span);
+
+            float dx = (float)(wx - center_x) / (float)rx;
+            float dy = (float)(wy - center_y) / (float)ry;
+            float dz = (float)(wz - center_z) / (float)rz;
+            float d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > 1.18f) continue;
+
+            uint32_t edge = hash3(wx, wy ^ (int)spec.salt, wz);
+            if (d2 < 0.78f || (edge % 100u) < 58u)
+                return true;
+        }
+    }
+    return false;
+}
+
+static BlockType oreAt(int wx, int wy, int wz, uint32_t seed) {
+    static constexpr OreClusterSpec kDiamond = {
+        BlockType::DiamondOre, 48, 5, 28, 24, 2, 3, 1, 3, 0xD1A00D5u
+    };
+    static constexpr OreClusterSpec kGold = {
+        BlockType::GoldOre, 34, 8, 54, 36, 3, 4, 2, 3, 0xA11C0DEu
+    };
+
+    if (inOreCluster(wx, wy, wz, seed, kDiamond)) return BlockType::DiamondOre;
+    if (inOreCluster(wx, wy, wz, seed, kGold))    return BlockType::GoldOre;
+    return BlockType::Stone;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // generate() — チャンク1つ分の地形を生成する
 // ─────────────────────────────────────────────────────────────────────────────
@@ -955,6 +1019,9 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                             t = BlockType::Air;
                     }
                 }
+
+                if (t == BlockType::Stone)
+                    t = oreAt(world_x + x, y, world_z + z, seed_);
 
                 chunk.setBlock(x, y, z, t);
                 if (t == BlockType::Water)

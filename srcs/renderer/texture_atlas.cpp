@@ -413,6 +413,46 @@ static void fillCactus(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// fillOre() — 石をベースに鉱石の斑点を混ぜる
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillOre(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
+                    int ore_r, int ore_g, int ore_b, int seed) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 61);
+            int n2 = hash2(px, py, 113);
+
+            int base = 112 + (n1 - 128) * 22 / 128;
+            int r = base + (n2 - 128) * 5 / 128;
+            int g = base + (n2 - 128) * 5 / 128;
+            int b = base + 6 + (n2 - 128) * 7 / 128;
+
+            int vein = hash2(px, py, seed);
+            bool ore = vein > 218
+                    || ((px + py) % 5 == 0 && vein > 176)
+                    || (std::abs(px - py) <= 1 && vein > 188);
+            if (ore) {
+                int sparkle = hash2(px, py, seed + 37);
+                r = ore_r + (sparkle - 128) * 24 / 128;
+                g = ore_g + (sparkle - 128) * 24 / 128;
+                b = ore_b + (sparkle - 128) * 24 / 128;
+                if (sparkle > 238) {
+                    r += 36;
+                    g += 36;
+                    b += 36;
+                }
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -442,6 +482,8 @@ bool TextureAtlas::generate() {
     fillLeaves   (pixels, atlas_w, 0, 1);            // Leaves  (col=0, row=1) tile=8
     fillCactus   (pixels, atlas_w, 1, 1);            // Cactus  (col=1, row=1) tile=9
     fillGrassSide(pixels, atlas_w, 2, 1);            // GrassSide (col=2, row=1) tile=10
+    fillOre      (pixels, atlas_w, 3, 1, 214, 174,  48, 701); // GoldOre    tile=11
+    fillOre      (pixels, atlas_w, 4, 1,  68, 218, 224, 809); // DiamondOre tile=12
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);

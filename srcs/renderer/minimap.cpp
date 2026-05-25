@@ -7,7 +7,7 @@
 #include <algorithm>
 
 // ── ブロックタイプ→RGBA カラーテーブル（BlockType のインデックスと対応） ─────
-static constexpr uint8_t kBlockRGB[9][3] = {
+static constexpr uint8_t kBlockRGB[13][3] = {
     {  25,  25,  25},  // Air
     {  88, 148,  64},  // Grass
     { 134,  96,  67},  // Dirt
@@ -17,6 +17,10 @@ static constexpr uint8_t kBlockRGB[9][3] = {
     {  44, 102, 195},  // Water
     { 100,  73,  47},  // Wood
     {  50,  95,  35},  // Leaves
+    {  45, 110,  35},  // Cactus
+    {  88, 148,  64},  // Grass side fallback
+    { 214, 174,  48},  // Gold ore
+    {  68, 218, 224},  // Diamond ore
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -113,7 +117,7 @@ void Minimap::update(World& world, float px, float pz, float yaw_deg, float dt) 
                         if (b != BlockType::Air) { bt = b; break; }
                     }
                     int bi = static_cast<int>(bt);
-                    if (bi < 0 || bi >= 9) bi = 0;
+                    if (bi < 0 || bi >= 13) bi = 0;
                     int idx = (row * kSize + col) * 4;
                     pixels_[idx + 0] = kBlockRGB[bi][0];
                     pixels_[idx + 1] = kBlockRGB[bi][1];
