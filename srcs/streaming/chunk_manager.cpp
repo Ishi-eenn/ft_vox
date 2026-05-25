@@ -101,6 +101,7 @@ void ChunkManager::drainTerrainDone() {
 
         if (world_.getChunk(pos)) continue;  // 二重登録ガード
 
+        world_.applyMods(chunk.get());
         Chunk* raw = world_.registerChunk(std::move(chunk));
         if (!raw) continue;
 

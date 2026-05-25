@@ -20,6 +20,10 @@
 #include "world/world.hpp"
 #include <cmath>
 #include <unordered_set>
+#include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // コンストラクタ / setSeed()
@@ -31,6 +35,122 @@ World::World(uint32_t seed) {
 void World::setSeed(uint32_t seed) {
     seed_ = seed;
     gen_.setSeed(seed);  // 地形生成器（TerrainGen）にシードを設定
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 永続化 — チャンク差分を saves/ ディレクトリに保存・ロードする
+//
+// ファイルフォーマット (バイナリ):
+//   magic[4]  = "VMOD"
+//   version   = uint8_t(1)
+//   count     = uint32_t  (エントリ数)
+//   entries[] = (uint16_t packed_key, uint8_t block_type) × count
+//
+//   packed_key = lx * CHUNK_SIZE_Z * CHUNK_SIZE_Y + lz * CHUNK_SIZE_Y + ly
+//                (0–65535 に収まる)
+// ─────────────────────────────────────────────────────────────────────────────
+
+static constexpr char   kMagic[4]   = {'V','M','O','D'};
+static constexpr uint8_t kVersion   = 1;
+
+std::string World::chunkSavePath(const std::string& dir, ChunkPos pos) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s/chunk_%d_%d.bin", dir.c_str(), pos.x, pos.z);
+    return buf;
+}
+
+void World::saveMods(ChunkPos pos) const {
+    if (save_dir_.empty()) return;
+    auto it = mods_.find(pos);
+
+    std::string path = chunkSavePath(save_dir_, pos);
+
+    if (it == mods_.end() || it->second.empty()) {
+        remove(path.c_str());
+        return;
+    }
+
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) return;
+
+    const auto& m = it->second;
+    uint32_t count = (uint32_t)m.size();
+    fwrite(kMagic, 1, 4, f);
+    fwrite(&kVersion, 1, 1, f);
+    fwrite(&count, sizeof(count), 1, f);
+    for (auto& [key, type] : m) {
+        uint16_t k = key;
+        uint8_t  t = (uint8_t)type;
+        fwrite(&k, sizeof(k), 1, f);
+        fwrite(&t, sizeof(t), 1, f);
+    }
+    fclose(f);
+}
+
+void World::loadSaveDir() {
+    if (save_dir_.empty()) return;
+    DIR* d = opendir(save_dir_.c_str());
+    if (!d) return;
+
+    struct dirent* entry;
+    while ((entry = readdir(d)) != nullptr) {
+        int cx, cz;
+        if (sscanf(entry->d_name, "chunk_%d_%d.bin", &cx, &cz) != 2) continue;
+
+        std::string path = chunkSavePath(save_dir_, {cx, cz});
+        FILE* f = fopen(path.c_str(), "rb");
+        if (!f) continue;
+
+        char magic[4];
+        uint8_t version;
+        uint32_t count;
+        if (fread(magic, 1, 4, f) != 4 || memcmp(magic, kMagic, 4) != 0 ||
+            fread(&version, 1, 1, f) != 1 || version != kVersion ||
+            fread(&count, sizeof(count), 1, f) != 1) {
+            fclose(f);
+            continue;
+        }
+
+        auto& m = mods_[{cx, cz}];
+        for (uint32_t i = 0; i < count; ++i) {
+            uint16_t key; uint8_t type;
+            if (fread(&key, sizeof(key), 1, f) != 1 ||
+                fread(&type, sizeof(type), 1, f) != 1) break;
+            m[key] = (BlockType)type;
+        }
+        fclose(f);
+    }
+    closedir(d);
+    fprintf(stderr, "[World] loaded %zu chunk mod file(s) from %s\n",
+            mods_.size(), save_dir_.c_str());
+}
+
+void World::setSaveDir(const std::string& dir) {
+    save_dir_ = dir;
+    // 親ディレクトリも作成（saves/<seed>/ の場合 saves/ が先に必要）
+    auto sep = dir.rfind('/');
+    if (sep != std::string::npos && sep > 0) {
+        std::string parent = dir.substr(0, sep);
+        mkdir(parent.c_str(), 0755);
+    }
+    mkdir(dir.c_str(), 0755);
+    loadSaveDir();
+}
+
+void World::applyMods(Chunk* chunk) const {
+    if (!chunk) return;
+    auto it = mods_.find(chunk->pos);
+    if (it == mods_.end()) return;
+
+    for (auto& [key, type] : it->second) {
+        int lx = key / (CHUNK_SIZE_Z * CHUNK_SIZE_Y);
+        int rem = key % (CHUNK_SIZE_Z * CHUNK_SIZE_Y);
+        int lz = rem / CHUNK_SIZE_Y;
+        int ly = rem % CHUNK_SIZE_Y;
+        chunk->setBlock(lx, ly, lz, type);
+        if (type == BlockType::Water && chunk->getWaterLevel(lx, ly, lz) == 0)
+            chunk->setWaterLevel(lx, ly, lz, 8);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -150,6 +270,21 @@ bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return false;
     BlockType old = getWorldBlock(wx, wy, wz);
     if (!setExistingWorldBlock(wx, wy, wz, type)) return false;
+
+    // 変更を mods_ に記録してディスクへ保存
+    {
+        ChunkPos pos = worldToChunk(wx, wz);
+        int lx = wx - pos.x * CHUNK_SIZE_X;
+        int lz = wz - pos.z * CHUNK_SIZE_Z;
+        uint16_t key = (uint16_t)(lx * CHUNK_SIZE_Z * CHUNK_SIZE_Y + lz * CHUNK_SIZE_Y + wy);
+        if (type == BlockType::Air) {
+            // Air は「元に戻した」か「実際に Air に変えた」か区別できないので記録する
+            mods_[pos][key] = BlockType::Air;
+        } else {
+            mods_[pos][key] = type;
+        }
+        saveMods(pos);
+    }
 
     flowing_water_.erase({wx, wy, wz});
     if (type == BlockType::Water || old == BlockType::Water) {

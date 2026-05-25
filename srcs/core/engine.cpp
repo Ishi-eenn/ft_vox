@@ -34,6 +34,7 @@
 
 #include <chrono>
 #include <thread>
+#include <string>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -282,6 +283,7 @@ bool Engine::init(uint32_t seed, int width, int height) {
 
     // ── ワールド（地形）の初期化 ───────────────────────────────────────────────
     impl_->world.setSeed(seed);
+    impl_->world.setSaveDir("saves/" + std::to_string(seed));
 
     // ── プレイヤー・カメラの初期化 ─────────────────────────────────────────────
     impl_->player.init(window_);
