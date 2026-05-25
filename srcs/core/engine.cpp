@@ -185,6 +185,7 @@ struct Engine::Impl {
     float         time_of_day    = 0.35f;
     bool          show_minimap_  = true;
     bool          show_player_list_ = false;
+    bool          show_stats_ = false;
 
     // Multiplayer
     NetworkClient net_client;
@@ -429,6 +430,16 @@ void Engine::run() {
             prev_tab = cur_tab;
         }
 
+        // ── F3 キー: FPS / triangles / cubes / chunks 表示切り替え ───────────
+        {
+            InputHandler& inp = impl_->player.input();
+            static bool prev_f3 = false;
+            bool cur_f3 = inp.isHeld(GLFW_KEY_F3);
+            if (cur_f3 && !prev_f3)
+                impl_->show_stats_ = !impl_->show_stats_;
+            prev_f3 = cur_f3;
+        }
+
         // ── ホットバー選択・ブロック操作 ─────────────────────────────────────
         {
             InputHandler& inp = impl_->player.input();
@@ -631,6 +642,15 @@ void Engine::run() {
 
         // フラスタムカリング済みの可視チャンクリストを取得（後続パスで共用）
         auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
+        int visible_triangles = 0;
+        int visible_cubes = 0;
+        if (impl_->show_stats_) {
+            for (const Chunk* c : visible) {
+                int indices = c->gpu.idx_count + c->gpu.idx_count_water;
+                visible_triangles += indices / 3;
+                visible_cubes += indices / 36;
+            }
+        }
 
         // パス1: GBufferパス（ビュー空間法線 + 深度をテクスチャに書き込む）
         impl_->renderer.beginGBufferPass();
@@ -679,6 +699,16 @@ void Engine::run() {
                                 (int)std::floor(ppos.x),
                                 (int)std::floor(ppos.y),
                                 (int)std::floor(ppos.z));
+
+        if (impl_->show_stats_) {
+            impl_->renderer.drawStats(
+                fps_display,
+                visible_triangles,
+                visible_cubes,
+                static_cast<int>(visible.size()),
+                static_cast<int>(impl_->chunk_mgr->loadedCount()),
+                impl_->show_minimap_);
+        }
 
         if (impl_->show_player_list_) {
             impl_->renderer.drawPlayerList(

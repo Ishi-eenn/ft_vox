@@ -402,11 +402,44 @@ void Renderer::appendLetter(float* verts, int& count, char letter,
             appendLine(verts, count, right, mid, (left + right) * 0.5f, top);
             appendLine(verts, count, left + w * 0.25f, mid, right - w * 0.25f, mid);
             break;
+        case 'B':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, left, bot, right, bot);
+            appendLine(verts, count, right, top, right, mid);
+            appendLine(verts, count, right, mid, right, bot);
+            break;
+        case 'C':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
         case 'E':
             appendLine(verts, count, left, top, left, bot);
             appendLine(verts, count, left, top, right, top);
             appendLine(verts, count, left, mid, right * 0.92f + left * 0.08f, mid);
             appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'F':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right * 0.92f + left * 0.08f, mid);
+            break;
+        case 'H':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, mid, right, mid);
+            break;
+        case 'I':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, (left + right) * 0.5f, top, (left + right) * 0.5f, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'K':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, mid, right, top);
+            appendLine(verts, count, left, mid, right, bot);
             break;
         case 'L':
             appendLine(verts, count, left, top, left, bot);
@@ -425,6 +458,10 @@ void Renderer::appendLetter(float* verts, int& count, char letter,
             appendLine(verts, count, left, mid, right, mid);
             appendLine(verts, count, right, mid, right, bot);
             appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'T':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, (left + right) * 0.5f, top, (left + right) * 0.5f, bot);
             break;
         case 'O':
             appendLine(verts, count, left, top, right, top);
@@ -550,6 +587,73 @@ void Renderer::drawHud(int fps, int px, int py, int pz) {
     glDisable(GL_DEPTH_TEST);  // HUD は常に最前面に表示
     hud_shader_.use();
     hud_shader_.setVec4("uColor", 1.0f, 1.0f, 1.0f, 0.9f);  // 白色
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawStats() — FPS / triangles / cubes / chunks を表示する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawStats(int fps, int triangles, int cubes,
+                         int visible_chunks, int loaded_chunks,
+                         bool minimap_visible) {
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
+    const float x0 = -1.0f + 12.0f / hw;
+    const float top_px = minimap_visible ? 320.0f : 44.0f;
+    const float y1 =  1.0f - top_px / hh;
+    const float x1 = x0 + 260.0f / hw;
+    const float y0 = y1 - 132.0f / hh;
+
+    auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
+                        float r, float g, float b, float a) {
+        float q[12] = {
+            qx0, qy0, qx1, qy0, qx1, qy1,
+            qx0, qy0, qx1, qy1, qx0, qy1
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(q), q);
+        hud_shader_.setVec4("uColor", r, g, b, a);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+    drawQuad(x0, y0, x1, y1, 0.02f, 0.03f, 0.04f, 0.62f);
+    drawQuad(x0, y1 - 4.0f / hh, x1, y1, 0.95f, 0.72f, 0.25f, 0.90f);
+
+    std::array<float, 2048> verts{};
+    int count = 0;
+    const float lw = 9.0f / hw;
+    const float lh = 14.0f / hh;
+    const float gap = 4.0f / hw;
+
+    auto appendWord = [&](const char* word, float x, float y) {
+        for (int i = 0; word[i] != '\0'; ++i) {
+            appendLetter(verts.data(), count, word[i], x, y, lw, lh);
+            x += lw + gap;
+        }
+    };
+    auto appendRow = [&](const char* label, int value, int row) {
+        float y = y1 - (24.0f + 24.0f * static_cast<float>(row)) / hh;
+        appendWord(label, x0 + 14.0f / hw, y);
+        appendNumber(verts.data(), count, value,
+                     x1 - 16.0f / hw, y, lw, lh, gap);
+    };
+
+    appendRow("FPS", fps, 0);
+    appendRow("TRI", triangles, 1);
+    appendRow("CUB", cubes, 2);
+    appendRow("CHK", visible_chunks, 3);
+    appendRow("LOAD", loaded_chunks, 4);
+
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
+    hud_shader_.setVec4("uColor", 0.96f, 0.92f, 0.78f, 0.94f);
     glBindVertexArray(hud_vao_);
     glDrawArrays(GL_LINES, 0, count / 2);
     glBindVertexArray(0);
