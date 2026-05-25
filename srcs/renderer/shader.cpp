@@ -184,6 +184,13 @@ void Shader::setFloat(const char* name, float val) const {
         glUniform1f(loc, val);
 }
 
+// 2次元ベクトルを送る（例: スクリーンサイズ・ノイズスケール）
+void Shader::setVec2(const char* name, float x, float y) const {
+    GLint loc = glGetUniformLocation(program_, name);
+    if (loc != -1)
+        glUniform2f(loc, x, y);
+}
+
 // 3次元ベクトルを送る（例: 太陽の方向・空の色）
 void Shader::setVec3(const char* name, float x, float y, float z) const {
     GLint loc = glGetUniformLocation(program_, name);

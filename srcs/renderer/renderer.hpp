@@ -11,6 +11,7 @@
 #include <map>
 #include <cstdint>
 #include <vector>
+#include <glm/glm.hpp>
 
 struct GLFWwindow;
 class World;
@@ -50,10 +51,18 @@ public:
     void endShadowPass();
     void drawChunkShadow(const Chunk* chunk);
 
+    // SSAO
+    void beginGBufferPass();
+    void drawChunkGBuffer(const Chunk* chunk, const float* view4x4, const float* proj4x4);
+    void endGBufferPass();
+    void computeSSAO(const float* proj4x4);
+
     const Frustum& getFrustum() const { return frustum_; }
 
 private:
     void initHud();
+    void initSSAO();
+    void resizeSSAOBuffers(int w, int h);
     void drawStevePart(const glm::mat4& mvp, const glm::mat4& model, const float* color);
     void appendLine(float* verts, int& count, float x0, float y0, float x1, float y1) const;
     void appendDigit(float* verts, int& count, int digit, float left, float top, float w, float h) const;
@@ -62,6 +71,7 @@ private:
     void appendSignedNumberLeft(float* verts, int& count, int value, float left, float top, float w, float h, float gap) const;
 
     static constexpr int SHADOW_MAP_SIZE = 2048;
+    static constexpr int SSAO_SAMPLES   = 64;
 
     GLFWwindow*  window_  = nullptr;
     Shader       chunk_shader_;
@@ -96,6 +106,27 @@ private:
     uint32_t     shadow_fbo_       = 0;
     uint32_t     shadow_depth_tex_ = 0;
     float        light_space_mat_[16] = {};  // lightProj * lightView
+
+    // SSAO resources
+    Shader   gbuffer_shader_;
+    Shader   ssao_shader_;
+    Shader   ssao_blur_shader_;
+
+    uint32_t gbuffer_fbo_        = 0;
+    uint32_t gbuffer_normal_tex_ = 0;
+    uint32_t gbuffer_depth_tex_  = 0;
+
+    uint32_t ssao_fbo_       = 0;
+    uint32_t ssao_color_tex_ = 0;
+
+    uint32_t ssao_blur_fbo_ = 0;
+    uint32_t ssao_blur_tex_ = 0;
+
+    uint32_t ssao_noise_tex_ = 0;
+    uint32_t ssao_quad_vao_  = 0;
+    uint32_t ssao_quad_vbo_  = 0;
+
+    glm::vec3 ssao_kernel_[SSAO_SAMPLES];
 
     float sun_dir_[3]      = { 0.0f,  1.0f, 0.0f};
     float ambient_         = 0.30f;

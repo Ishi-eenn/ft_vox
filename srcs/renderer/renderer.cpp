@@ -30,6 +30,7 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <random>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // コンストラクタ / デストラクタ
@@ -62,6 +63,21 @@ Renderer::~Renderer() {
     atlas_.destroy();
     skybox_.destroy();
     cloud_.destroy();
+
+    // SSAO リソース解放
+    gbuffer_shader_.destroy();
+    ssao_shader_.destroy();
+    ssao_blur_shader_.destroy();
+    if (gbuffer_fbo_)        { glDeleteFramebuffers(1, &gbuffer_fbo_);       gbuffer_fbo_        = 0; }
+    if (gbuffer_normal_tex_) { glDeleteTextures(1, &gbuffer_normal_tex_);    gbuffer_normal_tex_ = 0; }
+    if (gbuffer_depth_tex_)  { glDeleteTextures(1, &gbuffer_depth_tex_);     gbuffer_depth_tex_  = 0; }
+    if (ssao_fbo_)           { glDeleteFramebuffers(1, &ssao_fbo_);          ssao_fbo_           = 0; }
+    if (ssao_color_tex_)     { glDeleteTextures(1, &ssao_color_tex_);        ssao_color_tex_     = 0; }
+    if (ssao_blur_fbo_)      { glDeleteFramebuffers(1, &ssao_blur_fbo_);     ssao_blur_fbo_      = 0; }
+    if (ssao_blur_tex_)      { glDeleteTextures(1, &ssao_blur_tex_);         ssao_blur_tex_      = 0; }
+    if (ssao_noise_tex_)     { glDeleteTextures(1, &ssao_noise_tex_);        ssao_noise_tex_     = 0; }
+    if (ssao_quad_vao_)      { glDeleteVertexArrays(1, &ssao_quad_vao_);     ssao_quad_vao_      = 0; }
+    if (ssao_quad_vbo_)      { glDeleteBuffers(1, &ssao_quad_vbo_);          ssao_quad_vbo_      = 0; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,6 +241,9 @@ bool Renderer::init(GLFWwindow* window) {
                               (void*)(3 * sizeof(float)));
         glBindVertexArray(0);
     }
+
+    // ── SSAO の初期化 ──────────────────────────────────────────────────────────
+    initSSAO();
 
     return true;
 }
@@ -894,6 +913,13 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadow_depth_tex_);
     chunk_shader_.setInt("uShadowMap", 1);
+
+    // SSAOマップをテクスチャスロット 2 にバインド
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    chunk_shader_.setInt("uSSAOMap", 2);
+    chunk_shader_.setVec2("uScreenSize", (float)width_, (float)height_);
+
     glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(chunk->gpu.vao);
@@ -937,6 +963,12 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, shadow_depth_tex_);
     chunk_shader_.setInt("uShadowMap", 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    chunk_shader_.setInt("uSSAOMap", 2);
+    chunk_shader_.setVec2("uScreenSize", (float)width_, (float)height_);
+
     glActiveTexture(GL_TEXTURE0);
 
     glDepthMask(GL_FALSE);  // 深度バッファへの書き込みを止める
@@ -1066,6 +1098,289 @@ void Renderer::endShadowPass() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// initSSAO() — SSAOに必要なリソースをすべて生成する
+//
+// 処理:
+//   1. シェーダーロード（gbuffer / ssao / ssao_blur）
+//   2. ヘミスフィアサンプルカーネル生成（64点, 原点近くに集中）
+//   3. 4x4 ランダム回転ノイズテクスチャ生成
+//   4. フルスクリーンクアッド VAO 生成
+//   5. FBO を resizeSSAOBuffers で生成
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initSSAO() {
+    if (!gbuffer_shader_.load("assets/shaders/gbuffer.vert",
+                               "assets/shaders/gbuffer.frag")) {
+        std::cerr << "[Renderer] Failed to load GBuffer shaders\n";
+        return;
+    }
+    if (!ssao_shader_.load("assets/shaders/ssao.vert",
+                            "assets/shaders/ssao.frag")) {
+        std::cerr << "[Renderer] Failed to load SSAO shaders\n";
+        return;
+    }
+    if (!ssao_blur_shader_.load("assets/shaders/ssao.vert",
+                                 "assets/shaders/ssao_blur.frag")) {
+        std::cerr << "[Renderer] Failed to load SSAO blur shaders\n";
+        return;
+    }
+
+    // ── サンプルカーネル生成 ───────────────────────────────────────────────────
+    // ビュー空間ヘミスフィア上の64点。原点付近に密集させることで
+    // 近接ジオメトリによるオクルージョンを強調する。
+    std::default_random_engine gen(42);
+    std::uniform_real_distribution<float> rnd(0.0f, 1.0f);
+    for (int i = 0; i < SSAO_SAMPLES; ++i) {
+        glm::vec3 s(
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen)           // z ∈ [0,1] → 上半球
+        );
+        s = glm::normalize(s) * rnd(gen);
+        float scale = static_cast<float>(i) / static_cast<float>(SSAO_SAMPLES);
+        scale = 0.1f + scale * scale * 0.9f;  // 二次関数で原点付近に集中
+        ssao_kernel_[i] = s * scale;
+    }
+
+    // ── 4x4 ランダム回転ノイズテクスチャ ─────────────────────────────────────
+    // 各ピクセルに異なる TBN 基底を与え、パターンノイズを防ぐ。
+    // z=0 の XY 平面内のベクトルのみ（接線空間の回転なので Z 成分不要）。
+    glm::vec3 noise_data[16];
+    for (int i = 0; i < 16; ++i) {
+        noise_data[i] = glm::normalize(glm::vec3(
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen) * 2.0f - 1.0f,
+            0.0f
+        ));
+    }
+    glGenTextures(1, &ssao_noise_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_noise_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0,
+                 GL_RGB, GL_FLOAT, noise_data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // ── フルスクリーンクアッド VAO ────────────────────────────────────────────
+    static const float quad[] = {
+        -1.0f, -1.0f,   1.0f, -1.0f,   1.0f,  1.0f,
+        -1.0f, -1.0f,   1.0f,  1.0f,  -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &ssao_quad_vao_);
+    glGenBuffers(1, &ssao_quad_vbo_);
+    glBindVertexArray(ssao_quad_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, ssao_quad_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
+
+    // ── FBO 生成 ─────────────────────────────────────────────────────────────
+    resizeSSAOBuffers(width_, height_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resizeSSAOBuffers() — ウィンドウリサイズ時に SSAO 用 FBO をサイズに合わせて再生成する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::resizeSSAOBuffers(int w, int h) {
+    if (!ssao_noise_tex_) return;  // initSSAO がまだ走っていない場合はスキップ
+
+    // ── GBuffer FBO（法線 + 深度） ────────────────────────────────────────────
+    if (gbuffer_fbo_) {
+        glDeleteFramebuffers(1, &gbuffer_fbo_);
+        glDeleteTextures(1, &gbuffer_normal_tex_);
+        glDeleteTextures(1, &gbuffer_depth_tex_);
+    }
+    glGenFramebuffers(1, &gbuffer_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, gbuffer_fbo_);
+
+    glGenTextures(1, &gbuffer_normal_tex_);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_normal_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, gbuffer_normal_tex_, 0);
+
+    glGenTextures(1, &gbuffer_depth_tex_);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_depth_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, gbuffer_depth_tex_, 0);
+
+    GLuint gbuf_attach = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &gbuf_attach);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] GBuffer FBO incomplete\n";
+
+    // ── SSAO FBO（オクルージョン係数, R16F） ──────────────────────────────────
+    if (ssao_fbo_) {
+        glDeleteFramebuffers(1, &ssao_fbo_);
+        glDeleteTextures(1, &ssao_color_tex_);
+    }
+    glGenFramebuffers(1, &ssao_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+
+    glGenTextures(1, &ssao_color_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, ssao_color_tex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] SSAO FBO incomplete\n";
+
+    // ── SSAO Blur FBO（ブラー後, RGBA16F） ───────────────────────────────────
+    if (ssao_blur_fbo_) {
+        glDeleteFramebuffers(1, &ssao_blur_fbo_);
+        glDeleteTextures(1, &ssao_blur_tex_);
+    }
+    glGenFramebuffers(1, &ssao_blur_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+
+    glGenTextures(1, &ssao_blur_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, ssao_blur_tex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] SSAO Blur FBO incomplete\n";
+
+    // 初期値を 1.0（オクルージョンなし）でクリアしておく
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// beginGBufferPass() — GBufferパス開始（法線と深度を書き込む）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::beginGBufferPass() {
+    if (!gbuffer_fbo_) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, gbuffer_fbo_);
+    glViewport(0, 0, width_, height_);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawChunkGBuffer() — GBufferパスでチャンクを描画（法線出力のみ）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawChunkGBuffer(const Chunk* chunk,
+                                const float* view4x4, const float* proj4x4) {
+    if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
+
+    glm::mat4 model = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(
+            static_cast<float>(chunk->pos.x) * static_cast<float>(CHUNK_SIZE_X),
+            0.0f,
+            static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)));
+    glm::mat4 view = glm::make_mat4(view4x4);
+    glm::mat4 proj = glm::make_mat4(proj4x4);
+    glm::mat4 mvp        = proj * view * model;
+    glm::mat4 model_view = view * model;
+
+    gbuffer_shader_.use();
+    gbuffer_shader_.setMat4("uMVP",       glm::value_ptr(mvp));
+    gbuffer_shader_.setMat4("uModelView", glm::value_ptr(model_view));
+
+    glBindVertexArray(chunk->gpu.vao);
+    glDrawElements(GL_TRIANGLES,
+                   static_cast<GLsizei>(chunk->gpu.idx_count),
+                   GL_UNSIGNED_INT,
+                   nullptr);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// endGBufferPass() — GBufferパス終了
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::endGBufferPass() {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeSSAO() — SSAOパスとブラーパスを実行して ssao_blur_tex_ に書き込む
+//
+// 1. SSAO FBO にオクルージョン係数を計算
+// 2. Blur FBO で 4x4 ボックスブラーをかけてノイズを除去
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::computeSSAO(const float* proj4x4) {
+    if (!ssao_fbo_ || !gbuffer_fbo_) return;
+
+    glm::mat4 proj    = glm::make_mat4(proj4x4);
+    glm::mat4 inv_proj = glm::inverse(proj);
+
+    glDisable(GL_DEPTH_TEST);
+
+    // ── SSAOパス ─────────────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    ssao_shader_.use();
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_normal_tex_);
+    ssao_shader_.setInt("gNormal", 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_depth_tex_);
+    ssao_shader_.setInt("gDepth", 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_noise_tex_);
+    ssao_shader_.setInt("uNoiseTex", 2);
+
+    ssao_shader_.setMat4("uProjection",    glm::value_ptr(proj));
+    ssao_shader_.setMat4("uInvProjection", glm::value_ptr(inv_proj));
+    ssao_shader_.setVec2("uNoiseScale",
+                         (float)width_ / 4.0f, (float)height_ / 4.0f);
+
+    for (int i = 0; i < SSAO_SAMPLES; ++i) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "uSamples[%d]", i);
+        ssao_shader_.setVec3(name,
+                             ssao_kernel_[i].x,
+                             ssao_kernel_[i].y,
+                             ssao_kernel_[i].z);
+    }
+
+    glBindVertexArray(ssao_quad_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    // ── Blur パス ─────────────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    ssao_blur_shader_.use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_tex_);
+    ssao_blur_shader_.setInt("uSSAOInput", 0);
+
+    glBindVertexArray(ssao_quad_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glEnable(GL_DEPTH_TEST);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // endFrame() — フレームの終了処理（ダブルバッファリング）
 //
 // 【ダブルバッファリングとは？】
@@ -1084,6 +1399,7 @@ void Renderer::onResize(int w, int h) {
     glViewport(0, 0, w, h);  // 描画領域をウィンドウ全体に合わせる
     width_  = w;
     height_ = h;
+    resizeSSAOBuffers(w, h);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

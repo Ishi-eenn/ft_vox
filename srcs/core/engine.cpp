@@ -635,15 +635,24 @@ void Engine::run() {
         }
         impl_->renderer.endShadowPass();
 
+        // フラスタムカリング済みの可視チャンクリストを取得（後続パスで共用）
+        auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
+
+        // パス1: GBufferパス（ビュー空間法線 + 深度をテクスチャに書き込む）
+        impl_->renderer.beginGBufferPass();
+        for (Chunk* c : visible)
+            impl_->renderer.drawChunkGBuffer(c, view4x4, proj4x4);
+        impl_->renderer.endGBufferPass();
+
+        // パス2: SSAO + ブラー計算（ssao_blur_tex_ に結果を書き込む）
+        impl_->renderer.computeSSAO(proj4x4);
+
         impl_->renderer.beginFrame();  // 画面をクリア
 
         // 空（スカイボックス）を最初に描画する（最も遠い背景として）
         impl_->renderer.drawSkybox(sky_view4x4, proj4x4);
 
-        // フラスタムカリング済みの可視チャンクリストを取得
-        auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
-
-        // パス1: 不透明なブロック（石・土・草など）を描画
+        // パス3: 不透明なブロック（石・土・草など）を描画
         // 深度バッファに書き込むので、後で描く水がその後ろに隠れる。
         for (Chunk* c : visible) {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);

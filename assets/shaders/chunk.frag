@@ -6,7 +6,9 @@ in vec4  vShadowCoord;
 
 uniform sampler2D uAtlas;
 uniform sampler2D uShadowMap;
+uniform sampler2D uSSAOMap;
 uniform float     uSunStrength;  // 0のとき(夜)は影判定をスキップ
+uniform vec2      uScreenSize;
 
 out vec4 FragColor;
 
@@ -50,7 +52,13 @@ void main() {
 
     float shadowFactor = (uSunStrength > 0.01) ? calcShadow(vShadowCoord) : 1.0;
 
-    // 照らされている部分は vLight、影の中は vLightShadow でブレンド
-    float light = mix(vLightShadow, vLight, shadowFactor);
+    // SSAO: アンビエント成分のみに適用し、直接光は影響させない
+    float ssao = texture(uSSAOMap, gl_FragCoord.xy / uScreenSize).r;
+
+    // vLightShadow = アンビエント成分（影の中でも残る光）
+    // vLight - vLightShadow = 太陽直接光成分
+    float sun_direct = vLight - vLightShadow;
+    float light = vLightShadow * ssao + sun_direct * shadowFactor;
+
     FragColor = vec4(col.rgb * light, col.a);
 }
