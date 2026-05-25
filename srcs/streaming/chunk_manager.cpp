@@ -101,6 +101,7 @@ void ChunkManager::drainTerrainDone() {
 
         if (world_.getChunk(pos)) continue;  // 二重登録ガード
 
+        world_.applyMods(chunk.get());
         Chunk* raw = world_.registerChunk(std::move(chunk));
         if (!raw) continue;
 
@@ -194,8 +195,8 @@ void ChunkManager::update(float playerX, float playerZ, uint64_t frame) {
 }
 
 void ChunkManager::setRenderDistance(int rd) {
-    if (rd < RENDER_DISTANCE_MIN) rd = RENDER_DISTANCE_MIN;
-    if (rd > RENDER_DISTANCE_MAX) rd = RENDER_DISTANCE_MAX;
+    if (rd < 1)               rd = 1;
+    if (rd > RENDER_DISTANCE) rd = RENDER_DISTANCE;
     render_distance_ = rd;
 }
 
@@ -293,6 +294,18 @@ void ChunkManager::rebuildChunkAt(ChunkPos pos) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// getAllLoadedChunks() — GPU メッシュを持つ全チャンクを返す（シャドウパス用）
+// ─────────────────────────────────────────────────────────────────────────────
+std::vector<Chunk*> ChunkManager::getAllLoadedChunks() const {
+    std::vector<Chunk*> result;
+    result.reserve(loaded_.size());
+    loaded_.forEach([&](const ChunkPos& /*pos*/, Chunk* chunk) {
+        if (chunk && chunk->gpu.uploaded)
+            result.push_back(chunk);
+    });
+    return result;
+}
+
 // getVisibleChunks() — フラスタムカリングで可視チャンクだけを返す
 // ─────────────────────────────────────────────────────────────────────────────
 std::vector<Chunk*> ChunkManager::getVisibleChunks(const Frustum& frustum) {

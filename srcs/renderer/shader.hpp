@@ -14,6 +14,7 @@ public:
     void setMat4(const char* name, const float* mat4) const;
     void setInt(const char* name, int val) const;
     void setFloat(const char* name, float val) const;
+    void setVec2(const char* name, float x, float y) const;
     void setVec3(const char* name, float x, float y, float z) const;
     void setVec4(const char* name, float x, float y, float z, float w) const;
 

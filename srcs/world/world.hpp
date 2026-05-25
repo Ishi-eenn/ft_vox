@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <memory>
+#include <string>
 
 class World : public IWorld {
 public:
@@ -22,6 +23,10 @@ public:
     bool      setWorldBlock(int wx, int wy, int wz, BlockType type);
     std::vector<WorldPos> stepWater(ChunkPos min_chunk, ChunkPos max_chunk) override;
 
+    // Persistence
+    void setSaveDir(const std::string& dir);
+    void applyMods(Chunk* chunk) const override;
+
     std::unordered_map<ChunkPos, std::unique_ptr<Chunk>, ChunkPosHash>& chunks() {
         return chunks_;
     }
@@ -39,9 +44,17 @@ private:
     void activateWaterAt(int wx, int wy, int wz);
     void activateWaterNeighborhood(int wx, int wy, int wz);
 
+    void saveMods(ChunkPos pos) const;
+    void loadSaveDir();
+    static std::string chunkSavePath(const std::string& dir, ChunkPos pos);
+
     uint32_t    seed_ = 42;
     TerrainGenerator gen_;
     std::unordered_map<ChunkPos, std::unique_ptr<Chunk>, ChunkPosHash> chunks_;
     std::unordered_map<WorldPos, uint8_t, WorldPosHash> flowing_water_;
     std::unordered_set<WorldPos, WorldPosHash> active_water_;
+
+    // packed key: lx * CHUNK_SIZE_Z * CHUNK_SIZE_Y + lz * CHUNK_SIZE_Y + ly  (fits uint16_t)
+    std::unordered_map<ChunkPos, std::unordered_map<uint16_t, BlockType>, ChunkPosHash> mods_;
+    std::string save_dir_;
 };

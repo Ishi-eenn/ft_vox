@@ -4,12 +4,18 @@
 #include "renderer/texture_atlas.hpp"
 #include "renderer/frustum.hpp"
 #include "renderer/skybox.hpp"
+#include "renderer/cloud.hpp"
 #include "renderer/title_screen.hpp"
 #include "renderer/minimap.hpp"
+#include "mob/zombie.hpp"
+#include <map>
+#include <cstdint>
 #include <vector>
+#include <glm/glm.hpp>
 
 struct GLFWwindow;
 class World;
+struct RemotePlayer;
 
 class Renderer : public IRenderer {
 public:
@@ -23,38 +29,71 @@ public:
     void drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) override;
     void drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4);
     void drawSkybox(const float* view3x3, const float* proj4x4) override;
+    void drawClouds(const float* view4x4, const float* proj4x4,
+                    float cam_x, float cam_z, float elapsed_s);
     void drawHud(int fps, int px, int py, int pz);
+    void drawStats(int fps, int triangles, int cubes,
+                   int visible_chunks, int loaded_chunks,
+                   bool minimap_visible);
+    void drawPlayerList(uint8_t local_id,
+                        const std::map<uint8_t, RemotePlayer>& players,
+                        bool multiplayer);
+    void drawHotbar(const Inventory& inv);
     void drawUnderwaterOverlay();
-    // Returns true when the player presses SPACE to start the game
     bool drawTitleScreen(float dt);
-    // Update the minimap texture from world data, then render it
     void updateMinimap(World& world, float px, float pz, float yaw_deg, float dt);
     void drawMinimap();
+    void drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
+                           const float* view4x4, const float* proj4x4);
+    void drawMobs(const std::vector<Zombie>& zombies,
+                  const float* view4x4, const float* proj4x4);
     void endFrame() override;
     void onResize(int w, int h) override;
-
-    // Update all lighting/sky parameters from a [0,1) time-of-day value.
-    // 0.0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset.
     void setTimeOfDay(float t);
+
+    // Shadow mapping
+    void updateShadowMatrix(float px, float py, float pz);
+    void beginShadowPass();
+    void endShadowPass();
+    void drawChunkShadow(const Chunk* chunk);
+
+    // SSAO
+    void beginGBufferPass();
+    void drawChunkGBuffer(const Chunk* chunk, const float* view4x4, const float* proj4x4);
+    void endGBufferPass();
+    void computeSSAO(const float* proj4x4);
 
     const Frustum& getFrustum() const { return frustum_; }
 
 private:
     void initHud();
+    void initSSAO();
+    void resizeSSAOBuffers(int w, int h);
+    void drawStevePart(const glm::mat4& mvp, const glm::mat4& model, const float* color);
     void appendLine(float* verts, int& count, float x0, float y0, float x1, float y1) const;
     void appendDigit(float* verts, int& count, int digit, float left, float top, float w, float h) const;
     void appendNumber(float* verts, int& count, int value, float right, float top, float w, float h, float gap) const;
     void appendLetter(float* verts, int& count, char letter, float left, float top, float w, float h) const;
     void appendSignedNumberLeft(float* verts, int& count, int value, float left, float top, float w, float h, float gap) const;
 
+    static constexpr int SHADOW_MAP_SIZE = 2048;
+    static constexpr int SSAO_SAMPLES   = 64;
+
     GLFWwindow*  window_  = nullptr;
     Shader       chunk_shader_;
+    Shader       shadow_shader_;
     Shader       sky_shader_;
     Shader       hud_shader_;
+    Shader       entity_shader_;
+    uint32_t     entity_vao_ = 0;
+    uint32_t     entity_vbo_ = 0;
+    uint32_t     entity_ebo_ = 0;
     TextureAtlas atlas_;
     Skybox       skybox_;
     Frustum      frustum_;
     int          width_ = 1280, height_ = 720;
+
+    Cloud        cloud_;
 
     TitleScreen  title_screen_;
     Minimap      minimap_;
@@ -63,8 +102,38 @@ private:
     uint32_t     hud_vbo_     = 0;
     uint32_t     overlay_vao_ = 0;
     uint32_t     overlay_vbo_ = 0;
+    uint32_t     hotbar_vao_  = 0;   // slot backgrounds (2D only)
+    uint32_t     hotbar_vbo_  = 0;
+    Shader       hotbar_shader_;    // textured block icon shader
+    uint32_t     hotbar_tex_vao_ = 0;  // pos+UV for textured icons
+    uint32_t     hotbar_tex_vbo_ = 0;
 
-    // Lighting / sky state (updated by setTimeOfDay)
+    // Shadow map FBO
+    uint32_t     shadow_fbo_       = 0;
+    uint32_t     shadow_depth_tex_ = 0;
+    float        light_space_mat_[16] = {};  // lightProj * lightView
+
+    // SSAO resources
+    Shader   gbuffer_shader_;
+    Shader   ssao_shader_;
+    Shader   ssao_blur_shader_;
+
+    uint32_t gbuffer_fbo_        = 0;
+    uint32_t gbuffer_normal_tex_ = 0;
+    uint32_t gbuffer_depth_tex_  = 0;
+
+    uint32_t ssao_fbo_       = 0;
+    uint32_t ssao_color_tex_ = 0;
+
+    uint32_t ssao_blur_fbo_ = 0;
+    uint32_t ssao_blur_tex_ = 0;
+
+    uint32_t ssao_noise_tex_ = 0;
+    uint32_t ssao_quad_vao_  = 0;
+    uint32_t ssao_quad_vbo_  = 0;
+
+    glm::vec3 ssao_kernel_[SSAO_SAMPLES];
+
     float sun_dir_[3]      = { 0.0f,  1.0f, 0.0f};
     float ambient_         = 0.30f;
     float sun_strength_    = 0.65f;

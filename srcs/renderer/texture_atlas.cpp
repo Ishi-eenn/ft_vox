@@ -377,6 +377,166 @@ static void fillSolid(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
             setPixel(buf, atlas_w, ox, oy, px, py, r, g, b, a);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// fillCactus() — サボテンのテクスチャを生成する
+//
+// 濃い緑の縦縞模様で、サボテンのリブ（肋骨状の凸凹）を表現する。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillCactus(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n = hash2(px, py, 503);
+
+            int r = 44  + (n - 128) * 8 / 128;
+            int g = 110 + (n - 128) * 20 / 128;
+            int b = 30  + (n - 128) * 6 / 128;
+
+            // 縦リブ（3ピクセル間隔の明るい縞）
+            if (px % 3 == 1) {
+                r += 12;
+                g += 22;
+                b += 8;
+            }
+            // 横の節（4ピクセル間隔の暗い線）
+            if (py % 4 == 0) {
+                r -= 10;
+                g -= 18;
+                b -= 6;
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillOre() — 石をベースに鉱石の斑点を混ぜる
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillOre(uint8_t* buf, int atlas_w, int tile_col, int tile_row,
+                    int ore_r, int ore_g, int ore_b, int seed) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 61);
+            int n2 = hash2(px, py, 113);
+
+            int base = 112 + (n1 - 128) * 22 / 128;
+            int r = base + (n2 - 128) * 5 / 128;
+            int g = base + (n2 - 128) * 5 / 128;
+            int b = base + 6 + (n2 - 128) * 7 / 128;
+
+            int vein = hash2(px, py, seed);
+            bool ore = vein > 218
+                    || ((px + py) % 5 == 0 && vein > 176)
+                    || (std::abs(px - py) <= 1 && vein > 188);
+            if (ore) {
+                int sparkle = hash2(px, py, seed + 37);
+                r = ore_r + (sparkle - 128) * 24 / 128;
+                g = ore_g + (sparkle - 128) * 24 / 128;
+                b = ore_b + (sparkle - 128) * 24 / 128;
+                if (sparkle > 238) {
+                    r += 36;
+                    g += 36;
+                    b += 36;
+                }
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+static void fillShortGrassPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int from_bottom = tw - 1 - py;
+            int h1 = 5 + (hash2(px, 0, 911) % 8);
+            int h2 = 4 + (hash2(px, 0, 977) % 6);
+            bool blade = ((px % 4 == 1 || px % 7 == 2) && from_bottom < h1)
+                      || ((px + py) % 9 == 0 && from_bottom < h2);
+            if (!blade) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            int n = hash2(px, py, 941);
+            setPixel(buf, atlas_w, ox, oy, px, py,
+                     50 + (n % 20), 126 + (n % 46), 32 + (n % 18));
+        }
+    }
+}
+
+static void fillFlowerPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            bool stem = (px == 7 || px == 8) && py >= 5;
+            bool leaf = (py >= 9 && py <= 12 && (px == 5 || px == 10));
+            int dx = px - 7;
+            int dy = py - 4;
+            bool petal = dx * dx + dy * dy <= 9
+                      || ((px - 5) * (px - 5) + (py - 5) * (py - 5) <= 4)
+                      || ((px - 10) * (px - 10) + (py - 5) * (py - 5) <= 4);
+            if (!stem && !leaf && !petal) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            if (petal) {
+                int n = hash2(px, py, 1013);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         210 + (n % 35), 52 + (n % 34), 60 + (n % 48));
+            } else {
+                int n = hash2(px, py, 1021);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         45 + (n % 18), 128 + (n % 40), 38 + (n % 20));
+            }
+        }
+    }
+}
+
+static void fillMushroomPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            bool stem = (px >= 6 && px <= 9 && py >= 7 && py <= 14);
+            int dx = px - 7;
+            int dy = py - 5;
+            bool cap = (dx * dx * 2 + dy * dy * 3 <= 38) && py <= 8;
+            if (!stem && !cap) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+                continue;
+            }
+            if (cap) {
+                bool spot = ((px - 5) * (px - 5) + (py - 5) * (py - 5) <= 2)
+                         || ((px - 10) * (px - 10) + (py - 4) * (py - 4) <= 2);
+                int n = hash2(px, py, 1103);
+                if (spot)
+                    setPixel(buf, atlas_w, ox, oy, px, py, 226, 214, 184);
+                else
+                    setPixel(buf, atlas_w, ox, oy, px, py,
+                             146 + (n % 36), 48 + (n % 24), 38 + (n % 18));
+            } else {
+                int n = hash2(px, py, 1117);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         184 + (n % 32), 160 + (n % 28), 126 + (n % 22));
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,8 +563,14 @@ bool TextureAtlas::generate() {
     fillSnow (pixels, atlas_w, 5, 0);                // Snow
     fillWater(pixels, atlas_w, 6, 0);                // Water
     fillWood (pixels, atlas_w, 7, 0);                // Wood (trunk)
-    fillLeaves   (pixels, atlas_w, 0, 1);            // Leaves (row 1)
-    fillGrassSide(pixels, atlas_w, 1, 1);            // GrassSide (col=1, row=1)
+    fillLeaves   (pixels, atlas_w, 0, 1);            // Leaves  (col=0, row=1) tile=8
+    fillCactus   (pixels, atlas_w, 1, 1);            // Cactus  (col=1, row=1) tile=9
+    fillGrassSide(pixels, atlas_w, 2, 1);            // GrassSide (col=2, row=1) tile=10
+    fillOre      (pixels, atlas_w, 3, 1, 214, 174,  48, 701); // GoldOre    tile=11
+    fillOre      (pixels, atlas_w, 4, 1,  68, 218, 224, 809); // DiamondOre tile=12
+    fillShortGrassPlant(pixels, atlas_w, 5, 1);      // ShortGrass tile=13
+    fillFlowerPlant    (pixels, atlas_w, 6, 1);      // Flower     tile=14
+    fillMushroomPlant  (pixels, atlas_w, 7, 1);      // Mushroom   tile=15
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);

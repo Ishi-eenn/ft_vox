@@ -77,9 +77,14 @@ add_executable(
   srcs/renderer/frustum.cpp
   srcs/renderer/texture_atlas.cpp
   srcs/renderer/skybox.cpp
+  srcs/renderer/cloud.cpp
   srcs/renderer/title_screen.cpp
   srcs/renderer/minimap.cpp
   srcs/renderer/renderer.cpp
+  srcs/network/tcp_socket.cpp
+  srcs/network/server.cpp
+  srcs/network/client.cpp
+  srcs/mob/mob_manager.cpp
 )
 
 target_include_directories(

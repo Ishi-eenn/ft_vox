@@ -15,6 +15,8 @@
 #include "renderer/renderer.hpp"
 #include "types.hpp"
 #include "world/world.hpp"
+#include "network/client.hpp"
+#include "mob/zombie.hpp"
 
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
@@ -28,6 +30,7 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <random>
 
 // ─────────────────────────────────────────────────────────────────────────────
 // コンストラクタ / デストラクタ
@@ -39,14 +42,42 @@ Renderer::~Renderer() {
     title_screen_.destroy();
     minimap_.destroy();
     chunk_shader_.destroy();
+    shadow_shader_.destroy();
     sky_shader_.destroy();
+    if (shadow_fbo_)       { glDeleteFramebuffers(1, &shadow_fbo_);  shadow_fbo_       = 0; }
+    if (shadow_depth_tex_) { glDeleteTextures(1, &shadow_depth_tex_); shadow_depth_tex_ = 0; }
     hud_shader_.destroy();
+    entity_shader_.destroy();
+    if (entity_vao_)  { glDeleteVertexArrays(1, &entity_vao_);  entity_vao_  = 0; }
+    if (entity_vbo_)  { glDeleteBuffers(1, &entity_vbo_);       entity_vbo_  = 0; }
+    if (entity_ebo_)  { glDeleteBuffers(1, &entity_ebo_);       entity_ebo_  = 0; }
     if (hud_vao_)     { glDeleteVertexArrays(1, &hud_vao_);     hud_vao_     = 0; }
     if (hud_vbo_)     { glDeleteBuffers(1, &hud_vbo_);          hud_vbo_     = 0; }
     if (overlay_vao_) { glDeleteVertexArrays(1, &overlay_vao_); overlay_vao_ = 0; }
     if (overlay_vbo_) { glDeleteBuffers(1, &overlay_vbo_);      overlay_vbo_ = 0; }
+    if (hotbar_vao_)      { glDeleteVertexArrays(1, &hotbar_vao_);      hotbar_vao_      = 0; }
+    if (hotbar_vbo_)      { glDeleteBuffers(1, &hotbar_vbo_);          hotbar_vbo_      = 0; }
+    hotbar_shader_.destroy();
+    if (hotbar_tex_vao_)  { glDeleteVertexArrays(1, &hotbar_tex_vao_); hotbar_tex_vao_  = 0; }
+    if (hotbar_tex_vbo_)  { glDeleteBuffers(1, &hotbar_tex_vbo_);      hotbar_tex_vbo_  = 0; }
     atlas_.destroy();
     skybox_.destroy();
+    cloud_.destroy();
+
+    // SSAO リソース解放
+    gbuffer_shader_.destroy();
+    ssao_shader_.destroy();
+    ssao_blur_shader_.destroy();
+    if (gbuffer_fbo_)        { glDeleteFramebuffers(1, &gbuffer_fbo_);       gbuffer_fbo_        = 0; }
+    if (gbuffer_normal_tex_) { glDeleteTextures(1, &gbuffer_normal_tex_);    gbuffer_normal_tex_ = 0; }
+    if (gbuffer_depth_tex_)  { glDeleteTextures(1, &gbuffer_depth_tex_);     gbuffer_depth_tex_  = 0; }
+    if (ssao_fbo_)           { glDeleteFramebuffers(1, &ssao_fbo_);          ssao_fbo_           = 0; }
+    if (ssao_color_tex_)     { glDeleteTextures(1, &ssao_color_tex_);        ssao_color_tex_     = 0; }
+    if (ssao_blur_fbo_)      { glDeleteFramebuffers(1, &ssao_blur_fbo_);     ssao_blur_fbo_      = 0; }
+    if (ssao_blur_tex_)      { glDeleteTextures(1, &ssao_blur_tex_);         ssao_blur_tex_      = 0; }
+    if (ssao_noise_tex_)     { glDeleteTextures(1, &ssao_noise_tex_);        ssao_noise_tex_     = 0; }
+    if (ssao_quad_vao_)      { glDeleteVertexArrays(1, &ssao_quad_vao_);     ssao_quad_vao_      = 0; }
+    if (ssao_quad_vbo_)      { glDeleteBuffers(1, &ssao_quad_vbo_);          ssao_quad_vbo_      = 0; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,10 +110,42 @@ bool Renderer::init(GLFWwindow* window) {
         std::cerr << "[Renderer] Failed to load chunk shaders\n";
         return false;
     }
+    if (!shadow_shader_.load("assets/shaders/shadow.vert", "assets/shaders/shadow.frag")) {
+        std::cerr << "[Renderer] Failed to load shadow shaders\n";
+        return false;
+    }
     if (!sky_shader_.load("assets/shaders/skybox.vert", "assets/shaders/skybox.frag")) {
         std::cerr << "[Renderer] Failed to load skybox shaders\n";
         return false;
     }
+
+    // ── シャドウマップ FBO の生成 ──────────────────────────────────────────────
+    // SHADOW_MAP_SIZE × SHADOW_MAP_SIZE の深度テクスチャに太陽視点の深度を記録する。
+    glGenFramebuffers(1, &shadow_fbo_);
+
+    glGenTextures(1, &shadow_depth_tex_);
+    glBindTexture(GL_TEXTURE_2D, shadow_depth_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24,
+                 SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    // シャドウマップのサンプリング設定
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    // 範囲外は「影なし」として扱う (border = 1.0)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, shadow_depth_tex_, 0);
+    glDrawBuffer(GL_NONE);  // カラー出力なし (深度のみ)
+    glReadBuffer(GL_NONE);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] Shadow FBO incomplete\n";
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     // ── テクスチャアトラスの生成 ───────────────────────────────────────────────
     // 全ブロックの絵柄を1枚のテクスチャにまとめたもの（アトラス）
@@ -97,6 +160,10 @@ bool Renderer::init(GLFWwindow* window) {
         std::cerr << "[Renderer] Failed to initialise skybox\n";
         return false;
     }
+    if (!cloud_.init()) {
+        std::cerr << "[Renderer] Failed to initialise clouds\n";
+        return false;
+    }
 
     // ── HUD（照準＋FPS表示）の初期化 ──────────────────────────────────────────
     initHud();
@@ -109,6 +176,74 @@ bool Renderer::init(GLFWwindow* window) {
         std::cerr << "[Renderer] Failed to initialise minimap\n";
         return false;
     }
+
+    // ── エンティティ（リモートプレイヤー）シェーダーと VAO ────────────────────
+    if (!entity_shader_.load("assets/shaders/entity.vert",
+                              "assets/shaders/entity.frag")) {
+        std::cerr << "[Renderer] Failed to load entity shaders\n";
+        return false;
+    }
+    {
+        // Unit box: (−0.5,−0.5,−0.5) to (+0.5,+0.5,+0.5).
+        // 6 faces × 4 vertices, each vertex has pos(3) + normal(3).
+        static const float verts[] = {
+            // +Y face
+            -0.5f, 0.5f,-0.5f,  0, 1, 0,
+             0.5f, 0.5f,-0.5f,  0, 1, 0,
+             0.5f, 0.5f, 0.5f,  0, 1, 0,
+            -0.5f, 0.5f, 0.5f,  0, 1, 0,
+            // -Y face
+            -0.5f,-0.5f,-0.5f,  0,-1, 0,
+             0.5f,-0.5f,-0.5f,  0,-1, 0,
+             0.5f,-0.5f, 0.5f,  0,-1, 0,
+            -0.5f,-0.5f, 0.5f,  0,-1, 0,
+            // +Z face
+            -0.5f,-0.5f, 0.5f,  0, 0, 1,
+             0.5f,-0.5f, 0.5f,  0, 0, 1,
+             0.5f, 0.5f, 0.5f,  0, 0, 1,
+            -0.5f, 0.5f, 0.5f,  0, 0, 1,
+            // -Z face
+            -0.5f,-0.5f,-0.5f,  0, 0,-1,
+             0.5f,-0.5f,-0.5f,  0, 0,-1,
+             0.5f, 0.5f,-0.5f,  0, 0,-1,
+            -0.5f, 0.5f,-0.5f,  0, 0,-1,
+            // +X face
+             0.5f,-0.5f,-0.5f,  1, 0, 0,
+             0.5f,-0.5f, 0.5f,  1, 0, 0,
+             0.5f, 0.5f, 0.5f,  1, 0, 0,
+             0.5f, 0.5f,-0.5f,  1, 0, 0,
+            // -X face
+            -0.5f,-0.5f,-0.5f, -1, 0, 0,
+            -0.5f,-0.5f, 0.5f, -1, 0, 0,
+            -0.5f, 0.5f, 0.5f, -1, 0, 0,
+            -0.5f, 0.5f,-0.5f, -1, 0, 0,
+        };
+        static const uint32_t idx[] = {
+             0, 1, 2,  0, 2, 3,    // +Y
+             4, 6, 5,  4, 7, 6,    // -Y
+             8, 9,10,  8,10,11,    // +Z
+            12,14,13, 12,15,14,    // -Z
+            16,17,18, 16,18,19,    // +X
+            20,22,21, 20,23,22,    // -X
+        };
+        glGenVertexArrays(1, &entity_vao_);
+        glGenBuffers(1, &entity_vbo_);
+        glGenBuffers(1, &entity_ebo_);
+        glBindVertexArray(entity_vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, entity_vbo_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, entity_ebo_);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(idx), idx, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                              (void*)(3 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+
+    // ── SSAO の初期化 ──────────────────────────────────────────────────────────
+    initSSAO();
 
     return true;
 }
@@ -150,6 +285,31 @@ void Renderer::initHud() {
     glBufferData(GL_ARRAY_BUFFER, 1024 * 2 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
+    glBindVertexArray(0);
+
+    // ホットバー背景用 VAO (2D のみ, 1スロット分を逐次更新)
+    glGenVertexArrays(1, &hotbar_vao_);
+    glGenBuffers(1, &hotbar_vbo_);
+    glBindVertexArray(hotbar_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, 12 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
+
+    // ホットバーテクスチャアイコン用 VAO (pos.xy + uv.xy, 9スロット一括)
+    hotbar_shader_.load("assets/shaders/hotbar.vert", "assets/shaders/hotbar.frag");
+    glGenVertexArrays(1, &hotbar_tex_vao_);
+    glGenBuffers(1, &hotbar_tex_vbo_);
+    glBindVertexArray(hotbar_tex_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, hotbar_tex_vbo_);
+    // 9スロット × 6頂点 × 4floats = 216 floats
+    glBufferData(GL_ARRAY_BUFFER, 9 * 6 * 4 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                          (void*)(2 * sizeof(float)));
     glBindVertexArray(0);
 
     // 水中オーバーレイ: 画面全体を覆う2枚の三角形（NDC 座標）
@@ -229,6 +389,91 @@ void Renderer::appendLetter(float* verts, int& count, char letter,
     const float mid   = top - h * 0.5f;
     const float bot   = top - h;
     switch (letter) {
+        case 'P':
+            appendLine(verts, count, left,  top, right, top);
+            appendLine(verts, count, left,  mid, right, mid);
+            appendLine(verts, count, left,  top, left,  bot);
+            appendLine(verts, count, right, top, right, mid);
+            break;
+        case 'A':
+            appendLine(verts, count, left,  bot, left,  mid);
+            appendLine(verts, count, right, bot, right, mid);
+            appendLine(verts, count, left,  mid, (left + right) * 0.5f, top);
+            appendLine(verts, count, right, mid, (left + right) * 0.5f, top);
+            appendLine(verts, count, left + w * 0.25f, mid, right - w * 0.25f, mid);
+            break;
+        case 'B':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, left, bot, right, bot);
+            appendLine(verts, count, right, top, right, mid);
+            appendLine(verts, count, right, mid, right, bot);
+            break;
+        case 'C':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'E':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right * 0.92f + left * 0.08f, mid);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'F':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right * 0.92f + left * 0.08f, mid);
+            break;
+        case 'H':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, mid, right, mid);
+            break;
+        case 'I':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, (left + right) * 0.5f, top, (left + right) * 0.5f, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'K':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, mid, right, top);
+            appendLine(verts, count, left, mid, right, bot);
+            break;
+        case 'L':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'R':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, right, top, right, mid);
+            appendLine(verts, count, left + w * 0.4f, mid, right, bot);
+            break;
+        case 'S':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, top, left, mid);
+            appendLine(verts, count, left, mid, right, mid);
+            appendLine(verts, count, right, mid, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
+        case 'T':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, (left + right) * 0.5f, top, (left + right) * 0.5f, bot);
+            break;
+        case 'O':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            appendLine(verts, count, left, top, left, bot);
+            break;
+        case 'U':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            break;
         case 'X':
             appendLine(verts, count, left, top,   right, bot);   // 左上→右下
             appendLine(verts, count, right, top,  left,  bot);   // 右上→左下
@@ -345,6 +590,369 @@ void Renderer::drawHud(int fps, int px, int py, int pz) {
     glBindVertexArray(hud_vao_);
     glDrawArrays(GL_LINES, 0, count / 2);
     glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawStats() — FPS / triangles / cubes / chunks を表示する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawStats(int fps, int triangles, int cubes,
+                         int visible_chunks, int loaded_chunks,
+                         bool minimap_visible) {
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
+    const float x0 = -1.0f + 12.0f / hw;
+    const float top_px = minimap_visible ? 320.0f : 44.0f;
+    const float y1 =  1.0f - top_px / hh;
+    const float x1 = x0 + 260.0f / hw;
+    const float y0 = y1 - 132.0f / hh;
+
+    auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
+                        float r, float g, float b, float a) {
+        float q[12] = {
+            qx0, qy0, qx1, qy0, qx1, qy1,
+            qx0, qy0, qx1, qy1, qx0, qy1
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(q), q);
+        hud_shader_.setVec4("uColor", r, g, b, a);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+    drawQuad(x0, y0, x1, y1, 0.02f, 0.03f, 0.04f, 0.62f);
+    drawQuad(x0, y1 - 4.0f / hh, x1, y1, 0.95f, 0.72f, 0.25f, 0.90f);
+
+    std::array<float, 2048> verts{};
+    int count = 0;
+    const float lw = 9.0f / hw;
+    const float lh = 14.0f / hh;
+    const float gap = 4.0f / hw;
+
+    auto appendWord = [&](const char* word, float x, float y) {
+        for (int i = 0; word[i] != '\0'; ++i) {
+            appendLetter(verts.data(), count, word[i], x, y, lw, lh);
+            x += lw + gap;
+        }
+    };
+    auto appendRow = [&](const char* label, int value, int row) {
+        float y = y1 - (24.0f + 24.0f * static_cast<float>(row)) / hh;
+        appendWord(label, x0 + 14.0f / hw, y);
+        appendNumber(verts.data(), count, value,
+                     x1 - 16.0f / hw, y, lw, lh, gap);
+    };
+
+    appendRow("FPS", fps, 0);
+    appendRow("TRI", triangles, 1);
+    appendRow("CUB", cubes, 2);
+    appendRow("CHK", visible_chunks, 3);
+    appendRow("LOAD", loaded_chunks, 4);
+
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
+    hud_shader_.setVec4("uColor", 0.96f, 0.92f, 0.78f, 0.94f);
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawPlayerList() — 接続中プレイヤーID一覧を表示する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawPlayerList(uint8_t local_id,
+                              const std::map<uint8_t, RemotePlayer>& players,
+                              bool multiplayer) {
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
+    std::vector<uint8_t> ids;
+    ids.push_back(local_id == 0 ? 1 : local_id);
+    if (multiplayer) {
+        for (const auto& [id, _] : players) {
+            if (id != ids.front()) ids.push_back(id);
+            if (ids.size() >= 8) break;
+        }
+    }
+
+    const float panel_w = 190.0f / hw;
+    const float panel_h = (72.0f + 28.0f * static_cast<float>(ids.size())) / hh;
+    const float x0 = 1.0f - panel_w - 24.0f / hw;
+    const float y1 = 1.0f - 44.0f / hh;
+    const float x1 = x0 + panel_w;
+    const float y0 = y1 - panel_h;
+
+    auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
+                        float r, float g, float b, float a) {
+        float q[12] = {
+            qx0, qy0, qx1, qy0, qx1, qy1,
+            qx0, qy0, qx1, qy1, qx0, qy1
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(q), q);
+        hud_shader_.setVec4("uColor", r, g, b, a);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+
+    // Panel base and accent strip.
+    drawQuad(x0, y0, x1, y1, 0.02f, 0.03f, 0.04f, 0.62f);
+    drawQuad(x0, y1 - 4.0f / hh, x1, y1, 0.18f, 0.78f, 0.95f, 0.85f);
+
+    // Row backgrounds and status chips.
+    for (size_t i = 0; i < ids.size(); ++i) {
+        float top = y1 - (46.0f + 28.0f * static_cast<float>(i)) / hh;
+        float bot = top - 22.0f / hh;
+        float tint = (i == 0) ? 0.15f : 0.08f;
+        drawQuad(x0 + 10.0f / hw, bot, x1 - 10.0f / hw, top,
+                 tint, tint + 0.02f, tint + 0.03f, 0.55f);
+        drawQuad(x0 + 16.0f / hw, bot + 5.0f / hh,
+                 x0 + 24.0f / hw, top - 5.0f / hh,
+                 i == 0 ? 0.35f : 0.20f,
+                 i == 0 ? 0.95f : 0.75f,
+                 i == 0 ? 0.70f : 0.95f,
+                 0.95f);
+    }
+    glBindVertexArray(0);
+
+    std::array<float, 2048> verts{};
+    int count = 0;
+
+    auto appendWord = [&](const char* word, float x, float y, float w, float h, float gap) {
+        for (int i = 0; word[i] != '\0'; ++i) {
+            appendLetter(verts.data(), count, word[i], x, y, w, h);
+            x += w + gap;
+        }
+    };
+
+    const float lw = 9.0f / hw;
+    const float lh = 14.0f / hh;
+    const float gap = 4.0f / hw;
+
+    appendWord("PLAYERS", x0 + 14.0f / hw, y1 - 16.0f / hh, lw, lh, gap);
+    appendNumber(verts.data(), count, static_cast<int>(ids.size()),
+                 x1 - 18.0f / hw, y1 - 16.0f / hh, lw, lh, gap);
+
+    for (size_t i = 0; i < ids.size(); ++i) {
+        float y = y1 - (52.0f + 28.0f * static_cast<float>(i)) / hh;
+        float x = x0 + 34.0f / hw;
+        appendLetter(verts.data(), count, 'P', x, y, lw, lh);
+        x += lw + gap;
+        appendNumber(verts.data(), count, ids[i], x + 20.0f / hw, y, lw, lh, gap);
+        if (i == 0) appendWord("YOU", x1 - 50.0f / hw, y, lw, lh, gap);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
+
+    hud_shader_.setVec4("uColor", 0.92f, 0.98f, 1.0f, 0.92f);
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawHotbar() — 画面下中央にホットバー（9スロット）を描画する
+//
+// パス1: hud_shader_    — スロット背景
+// パス2: hotbar_shader_ — 3Dアイソメトリックブロック（上面・左面・右面）
+// パス3: hud_shader_    — 枠線 + 選択ハイライト + 個数（7セグ）
+//
+// 【アイソメトリックキューブの頂点レイアウト】
+//
+//          T
+//         / \
+//       TL   TR       ← "赤道"ライン（上面と側面の境界）
+//       |\ / |
+//       | M  |        ← 3面の内側交点
+//       BL   BR       ← 底の赤道ライン
+//         \ /
+//          B
+//
+//   上面: T, TR, M, TL  — 最も明るい（uBright=1.00）
+//   左面: TL, M, B, BL  — 中くらい    （uBright=0.74）
+//   右面: TR, BR, B, M  — 最も暗い    （uBright=0.58）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawHotbar(const Inventory& inv) {
+    const float hw = (float)width_  * 0.5f;
+    const float hh = (float)height_ * 0.5f;
+
+    constexpr float SLOT_PX   = 52.0f;
+    constexpr float GAP_PX    =  5.0f;
+    constexpr float BOTTOM_PX = 14.0f;
+
+    const float total_w = HOTBAR_SIZE * SLOT_PX + (HOTBAR_SIZE - 1) * GAP_PX;
+    const float sx0_px  = ((float)width_ - total_w) * 0.5f;
+
+    auto nx = [&](float px) { return px / hw - 1.0f; };
+    auto ny = [&](float py) { return py / hh - 1.0f; };
+
+    const float sy0 = ny(BOTTOM_PX);
+    const float sy1 = ny(BOTTOM_PX + SLOT_PX);
+
+    // アイソメトリックキューブの寸法（ピクセル→NDC）
+    // 2:1 アイソメトリック比: 上面の高さ = 水平幅 / 2
+    const float W  = 21.0f / hw;    // 半幅
+    const float HT = 10.5f / hh;    // 上面の半高さ（2:1比 → HT = W*hw/hh/2）
+    const float HS = 12.0f / hh;    // 側面の高さ
+
+    glDisable(GL_DEPTH_TEST);
+
+    // ── パス1: スロット背景 ────────────────────────────────────────────────
+    hud_shader_.use();
+    auto drawBgQuad = [&](float x0, float y0, float x1, float y1) {
+        float v[12] = { x0, y0,  x1, y0,  x1, y1,
+                        x0, y0,  x1, y1,  x0, y1 };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+    };
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        float x0 = nx(sx0_px + i * (SLOT_PX + GAP_PX));
+        float x1 = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX);
+        float bg = (i == inv.selected) ? 0.55f : 0.22f;
+        hud_shader_.setVec4("uColor", bg * 0.6f, bg * 0.6f, bg * 0.6f, 0.85f);
+        drawBgQuad(x0, sy0, x1, sy1);
+    }
+
+    // ── パス2: 3Dアイソメトリックブロック ────────────────────────────────
+    // face=0: 上面(bright=1.00)  face=1: 左面(bright=0.74)  face=2: 右面(bright=0.58)
+    static constexpr float kFaceBright[3] = { 1.00f, 0.74f, 0.58f };
+
+    glDisable(GL_CULL_FACE);
+    hotbar_shader_.use();
+    hotbar_shader_.setInt("uAtlas", 0);
+    atlas_.bind(0);
+    glBindVertexArray(hotbar_tex_vao_);
+
+    for (int face = 0; face < 3; ++face) {
+        hotbar_shader_.setFloat("uBright", kFaceBright[face]);
+
+        float verts[9 * 6 * 4] = {};
+        int   vc = 0, drawn = 0;
+
+        for (int i = 0; i < HOTBAR_SIZE; ++i) {
+            const ItemStack& s = inv.slots[i];
+            if (s.type == BlockType::Air || s.count <= 0) continue;
+
+            AtlasUV uv = atlas_.getUV(s.type);
+            float uc = (uv.u0 + uv.u1) * 0.5f;
+            float vc2 = (uv.v0 + uv.v1) * 0.5f;
+
+            // スロット垂直中心（アイコン基準点）
+            float cx = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX * 0.5f);
+            // キューブ中心を少し上寄りにオフセット（底の隙間を減らす）
+            float cy = ny(BOTTOM_PX + SLOT_PX * 0.5f) + HS * 0.1f;
+
+            // 7頂点
+            float T_x = cx,    T_y = cy + HT + HS;
+            float TL_x = cx-W, TL_y = cy + HS;
+            float TR_x = cx+W, TR_y = cy + HS;
+            float M_x  = cx,   M_y  = cy;
+            float BL_x = cx-W, BL_y = cy - HS;
+            float BR_x = cx+W, BR_y = cy - HS;
+            float B_x  = cx,   B_y  = cy - HT - HS;
+
+            // 各面を2三角形で定義: [x, y, u, v] × 6頂点
+            float tri[6][4];
+
+            if (face == 0) {
+                // 上面(ダイヤモンドUV: テクスチャを45°回転して貼る)
+                tri[0][0]=T_x;  tri[0][1]=T_y;  tri[0][2]=uc;     tri[0][3]=uv.v0;
+                tri[1][0]=TR_x; tri[1][1]=TR_y; tri[1][2]=uv.u1;  tri[1][3]=vc2;
+                tri[2][0]=M_x;  tri[2][1]=M_y;  tri[2][2]=uc;     tri[2][3]=uv.v1;
+                tri[3][0]=T_x;  tri[3][1]=T_y;  tri[3][2]=uc;     tri[3][3]=uv.v0;
+                tri[4][0]=M_x;  tri[4][1]=M_y;  tri[4][2]=uc;     tri[4][3]=uv.v1;
+                tri[5][0]=TL_x; tri[5][1]=TL_y; tri[5][2]=uv.u0;  tri[5][3]=vc2;
+            } else if (face == 1) {
+                // 左面
+                tri[0][0]=TL_x; tri[0][1]=TL_y; tri[0][2]=uv.u0;  tri[0][3]=uv.v0;
+                tri[1][0]=M_x;  tri[1][1]=M_y;  tri[1][2]=uv.u1;  tri[1][3]=uv.v0;
+                tri[2][0]=B_x;  tri[2][1]=B_y;  tri[2][2]=uv.u1;  tri[2][3]=uv.v1;
+                tri[3][0]=TL_x; tri[3][1]=TL_y; tri[3][2]=uv.u0;  tri[3][3]=uv.v0;
+                tri[4][0]=B_x;  tri[4][1]=B_y;  tri[4][2]=uv.u1;  tri[4][3]=uv.v1;
+                tri[5][0]=BL_x; tri[5][1]=BL_y; tri[5][2]=uv.u0;  tri[5][3]=uv.v1;
+            } else {
+                // 右面
+                tri[0][0]=TR_x; tri[0][1]=TR_y; tri[0][2]=uv.u0;  tri[0][3]=uv.v0;
+                tri[1][0]=BR_x; tri[1][1]=BR_y; tri[1][2]=uv.u0;  tri[1][3]=uv.v1;
+                tri[2][0]=B_x;  tri[2][1]=B_y;  tri[2][2]=uv.u1;  tri[2][3]=uv.v1;
+                tri[3][0]=TR_x; tri[3][1]=TR_y; tri[3][2]=uv.u0;  tri[3][3]=uv.v0;
+                tri[4][0]=B_x;  tri[4][1]=B_y;  tri[4][2]=uv.u1;  tri[4][3]=uv.v1;
+                tri[5][0]=M_x;  tri[5][1]=M_y;  tri[5][2]=uv.u1;  tri[5][3]=uv.v0;
+            }
+
+            for (int v = 0; v < 6; ++v)
+                for (int c = 0; c < 4; ++c)
+                    verts[vc++] = tri[v][c];
+            ++drawn;
+        }
+
+        if (drawn > 0) {
+            glBindBuffer(GL_ARRAY_BUFFER, hotbar_tex_vbo_);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, vc * sizeof(float), verts);
+            glDrawArrays(GL_TRIANGLES, 0, drawn * 6);
+        }
+    }
+
+    glBindVertexArray(0);
+    glEnable(GL_CULL_FACE);
+
+    // ── パス3: 枠線 + 選択ハイライト + 個数 ──────────────────────────────
+    hud_shader_.use();
+    std::array<float, 2048> verts{};
+    int cnt = 0;
+
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        float x0 = nx(sx0_px + i * (SLOT_PX + GAP_PX));
+        float x1 = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX);
+
+        // 通常枠線（暗め）→ 後で白を上書きするのでバッチへ追加するだけ
+        appendLine(verts.data(), cnt, x0, sy0, x1, sy0);
+        appendLine(verts.data(), cnt, x0, sy1, x1, sy1);
+        appendLine(verts.data(), cnt, x0, sy0, x0, sy1);
+        appendLine(verts.data(), cnt, x1, sy0, x1, sy1);
+
+        // 個数（2個以上のとき右下に表示）
+        const ItemStack& s = inv.slots[i];
+        if (s.type != BlockType::Air && s.count > 1) {
+            float dw = 8.0f / hw, dh = 11.0f / hh, dg = 2.0f / hw;
+            appendNumber(verts.data(), cnt, s.count,
+                         x1 - 3.0f / hw, sy0 + dh + 3.0f / hh, dw, dh, dg);
+        }
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, cnt * sizeof(float), verts.data());
+    hud_shader_.setVec4("uColor", 0.75f, 0.75f, 0.75f, 0.85f);
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, cnt / 2);
+
+    // 選択スロットだけ明るい白で上書き描画
+    {
+        int i = inv.selected;
+        float x0 = nx(sx0_px + i * (SLOT_PX + GAP_PX));
+        float x1 = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX);
+        float sel[16] = {
+            x0, sy0, x1, sy0,
+            x0, sy1, x1, sy1,
+            x0, sy0, x0, sy1,
+            x1, sy0, x1, sy1,
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(sel), sel);
+        hud_shader_.setVec4("uColor", 1.0f, 1.0f, 1.0f, 1.0f);
+        glDrawArrays(GL_LINES, 0, 8);
+    }
+    glBindVertexArray(0);
+
     glEnable(GL_DEPTH_TEST);
 }
 
@@ -524,6 +1132,12 @@ static void setChunkLightingUniforms(Shader& shader,
     shader.setFloat("uSunStrength", sun_strength);
 }
 
+static void setChunkFogUniforms(Shader& shader, const float sky_horizon[3]) {
+    shader.setVec3 ("uFogColor",  sky_horizon[0], sky_horizon[1], sky_horizon[2]);
+    shader.setFloat("uFogStart",  170.0f);
+    shader.setFloat("uFogEnd",    310.0f);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // drawChunk() — 不透明チャンクを描画する（パス1）
 //
@@ -533,19 +1147,44 @@ static void setChunkLightingUniforms(Shader& shader,
 void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
     if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
 
-    glm::mat4 mvp = buildMVP(chunk, view4x4, proj4x4);
+    glm::mat4 model = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(
+            static_cast<float>(chunk->pos.x) * static_cast<float>(CHUNK_SIZE_X),
+            0.0f,
+            static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)));
+    glm::mat4 mvp = glm::make_mat4(proj4x4) * glm::make_mat4(view4x4) * model;
 
     chunk_shader_.use();
-    chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+    chunk_shader_.setMat4("uMVP",          glm::value_ptr(mvp));
+    chunk_shader_.setMat4("uModel",        glm::value_ptr(model));
+    chunk_shader_.setMat4("uView",         view4x4);
+    chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
-    atlas_.bind(0);                    // テクスチャスロット 0 にアトラスを bind
+    setChunkFogUniforms(chunk_shader_, sky_horizon_);
+    chunk_shader_.setFloat("uSunStrength", sun_strength_);
+
+    atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
+
+    // シャドウマップをテクスチャスロット 1 にバインド
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, shadow_depth_tex_);
+    chunk_shader_.setInt("uShadowMap", 1);
+
+    // SSAOマップをテクスチャスロット 2 にバインド
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    chunk_shader_.setInt("uSSAOMap", 2);
+    chunk_shader_.setVec2("uScreenSize", (float)width_, (float)height_);
+
+    glActiveTexture(GL_TEXTURE0);
 
     glBindVertexArray(chunk->gpu.vao);
     glDrawElements(GL_TRIANGLES,
                    static_cast<GLsizei>(chunk->gpu.idx_count),
                    GL_UNSIGNED_INT,
-                   nullptr);           // EBO の先頭から idx_count 個分
+                   nullptr);
     glBindVertexArray(0);
 }
 
@@ -561,13 +1200,36 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
 void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const float* proj4x4) {
     if (!chunk->gpu.uploaded || chunk->gpu.idx_count_water == 0) return;
 
-    glm::mat4 mvp = buildMVP(chunk, view4x4, proj4x4);
+    glm::mat4 model = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(
+            static_cast<float>(chunk->pos.x) * static_cast<float>(CHUNK_SIZE_X),
+            0.0f,
+            static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)));
+    glm::mat4 mvp = glm::make_mat4(proj4x4) * glm::make_mat4(view4x4) * model;
 
     chunk_shader_.use();
-    chunk_shader_.setMat4("uMVP", glm::value_ptr(mvp));
+    chunk_shader_.setMat4("uMVP",          glm::value_ptr(mvp));
+    chunk_shader_.setMat4("uModel",        glm::value_ptr(model));
+    chunk_shader_.setMat4("uView",         view4x4);
+    chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
+    setChunkFogUniforms(chunk_shader_, sky_horizon_);
+    chunk_shader_.setFloat("uSunStrength", sun_strength_);
+
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, shadow_depth_tex_);
+    chunk_shader_.setInt("uShadowMap", 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    chunk_shader_.setInt("uSSAOMap", 2);
+    chunk_shader_.setVec2("uScreenSize", (float)width_, (float)height_);
+
+    glActiveTexture(GL_TEXTURE0);
 
     glDepthMask(GL_FALSE);  // 深度バッファへの書き込みを止める
 
@@ -602,6 +1264,383 @@ void Renderer::drawSkybox(const float* view3x3, const float* proj4x4) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// drawClouds() — 3D 雲レイヤーを描画する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawClouds(const float* view4x4, const float* proj4x4,
+                          float cam_x, float cam_z, float elapsed_s) {
+    cloud_.draw(view4x4, proj4x4, cam_x, cam_z, elapsed_s, sun_dir_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// updateShadowMatrix() — 光源空間行列 (LightProj × LightView) を計算する
+//
+// 太陽方向 (sun_dir_) とプレイヤー位置からオーソグラフィック射影行列を作る。
+// この行列でチャンクを描くと「太陽から見た深度マップ」になる。
+//
+// 【オーソグラフィック射影】
+//   遠近感がない平行投影。太陽は無限遠にあるので、この投影が適切。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::updateShadowMatrix(float px, float py, float pz) {
+    glm::vec3 sunDir  = glm::normalize(glm::vec3(sun_dir_[0], sun_dir_[1], sun_dir_[2]));
+    glm::vec3 playerPos = glm::vec3(px, py, pz);
+
+    // 光源位置: 太陽方向にプレイヤーから 350 ブロック離れた点
+    glm::vec3 lightPos = playerPos + sunDir * 350.0f;
+
+    // 上ベクトル: 太陽が真上/真下に近いときは別軸を使う
+    glm::vec3 up = (std::abs(sunDir.y) > 0.98f)
+                   ? glm::vec3(1.0f, 0.0f, 0.0f)
+                   : glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::mat4 lightView = glm::lookAt(lightPos, playerPos, up);
+
+    // 描画距離 (160ブロック) をカバーする直交ボックス
+    constexpr float RANGE = 200.0f;
+    glm::mat4 lightProj   = glm::ortho(-RANGE, RANGE, -RANGE, RANGE, 1.0f, 750.0f);
+
+    glm::mat4 lsMat = lightProj * lightView;
+    std::memcpy(light_space_mat_, glm::value_ptr(lsMat), 16 * sizeof(float));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// beginShadowPass() — シャドウパスの開始
+//
+// シャドウ用 FBO に切り替え、太陽視点で深度のみ描画する準備をする。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::beginShadowPass() {
+    glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_);
+    glViewport(0, 0, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    // ポリゴンオフセット: シャドウマップの深度値を傾きに応じてわずかにずらす。
+    // これにより surface 自身が自分の影を描くself-shadowingを防ぐ。
+    // ボクセルメッシュでは glCullFace(GL_FRONT) を使うと地形の上面(影の元)が
+    // シャドウマップから除外されてしまうため、通常の GL_BACK カリングのままにする。
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawChunkShadow() — シャドウパスでのチャンク描画
+//
+// shadow_shader_ (position のみ) で描画し、深度バッファに書き込む。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawChunkShadow(const Chunk* chunk) {
+    if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
+
+    glm::mat4 model = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(
+            static_cast<float>(chunk->pos.x) * static_cast<float>(CHUNK_SIZE_X),
+            0.0f,
+            static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)));
+    glm::mat4 lightMVP = glm::make_mat4(light_space_mat_) * model;
+
+    shadow_shader_.use();
+    shadow_shader_.setMat4("uLightMVP", glm::value_ptr(lightMVP));
+
+    glBindVertexArray(chunk->gpu.vao);
+    glDrawElements(GL_TRIANGLES,
+                   static_cast<GLsizei>(chunk->gpu.idx_count),
+                   GL_UNSIGNED_INT,
+                   nullptr);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// endShadowPass() — シャドウパスの終了
+//
+// デフォルト FBO に戻し、ビューポートをウィンドウサイズに復元する。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::endShadowPass() {
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// initSSAO() — SSAOに必要なリソースをすべて生成する
+//
+// 処理:
+//   1. シェーダーロード（gbuffer / ssao / ssao_blur）
+//   2. ヘミスフィアサンプルカーネル生成（64点, 原点近くに集中）
+//   3. 4x4 ランダム回転ノイズテクスチャ生成
+//   4. フルスクリーンクアッド VAO 生成
+//   5. FBO を resizeSSAOBuffers で生成
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::initSSAO() {
+    if (!gbuffer_shader_.load("assets/shaders/gbuffer.vert",
+                               "assets/shaders/gbuffer.frag")) {
+        std::cerr << "[Renderer] Failed to load GBuffer shaders\n";
+        return;
+    }
+    if (!ssao_shader_.load("assets/shaders/ssao.vert",
+                            "assets/shaders/ssao.frag")) {
+        std::cerr << "[Renderer] Failed to load SSAO shaders\n";
+        return;
+    }
+    if (!ssao_blur_shader_.load("assets/shaders/ssao.vert",
+                                 "assets/shaders/ssao_blur.frag")) {
+        std::cerr << "[Renderer] Failed to load SSAO blur shaders\n";
+        return;
+    }
+
+    // ── サンプルカーネル生成 ───────────────────────────────────────────────────
+    // ビュー空間ヘミスフィア上の64点。原点付近に密集させることで
+    // 近接ジオメトリによるオクルージョンを強調する。
+    std::default_random_engine gen(42);
+    std::uniform_real_distribution<float> rnd(0.0f, 1.0f);
+    for (int i = 0; i < SSAO_SAMPLES; ++i) {
+        glm::vec3 s(
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen)           // z ∈ [0,1] → 上半球
+        );
+        s = glm::normalize(s) * rnd(gen);
+        float scale = static_cast<float>(i) / static_cast<float>(SSAO_SAMPLES);
+        scale = 0.1f + scale * scale * 0.9f;  // 二次関数で原点付近に集中
+        ssao_kernel_[i] = s * scale;
+    }
+
+    // ── 4x4 ランダム回転ノイズテクスチャ ─────────────────────────────────────
+    // 各ピクセルに異なる TBN 基底を与え、パターンノイズを防ぐ。
+    // z=0 の XY 平面内のベクトルのみ（接線空間の回転なので Z 成分不要）。
+    glm::vec3 noise_data[16];
+    for (int i = 0; i < 16; ++i) {
+        noise_data[i] = glm::normalize(glm::vec3(
+            rnd(gen) * 2.0f - 1.0f,
+            rnd(gen) * 2.0f - 1.0f,
+            0.0f
+        ));
+    }
+    glGenTextures(1, &ssao_noise_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_noise_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0,
+                 GL_RGB, GL_FLOAT, noise_data);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    // ── フルスクリーンクアッド VAO ────────────────────────────────────────────
+    static const float quad[] = {
+        -1.0f, -1.0f,   1.0f, -1.0f,   1.0f,  1.0f,
+        -1.0f, -1.0f,   1.0f,  1.0f,  -1.0f,  1.0f,
+    };
+    glGenVertexArrays(1, &ssao_quad_vao_);
+    glGenBuffers(1, &ssao_quad_vbo_);
+    glBindVertexArray(ssao_quad_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, ssao_quad_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
+
+    // ── FBO 生成 ─────────────────────────────────────────────────────────────
+    resizeSSAOBuffers(width_, height_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resizeSSAOBuffers() — ウィンドウリサイズ時に SSAO 用 FBO をサイズに合わせて再生成する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::resizeSSAOBuffers(int w, int h) {
+    if (!ssao_noise_tex_) return;  // initSSAO がまだ走っていない場合はスキップ
+
+    // ── GBuffer FBO（法線 + 深度） ────────────────────────────────────────────
+    if (gbuffer_fbo_) {
+        glDeleteFramebuffers(1, &gbuffer_fbo_);
+        glDeleteTextures(1, &gbuffer_normal_tex_);
+        glDeleteTextures(1, &gbuffer_depth_tex_);
+    }
+    glGenFramebuffers(1, &gbuffer_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, gbuffer_fbo_);
+
+    glGenTextures(1, &gbuffer_normal_tex_);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_normal_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, gbuffer_normal_tex_, 0);
+
+    glGenTextures(1, &gbuffer_depth_tex_);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_depth_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, w, h, 0,
+                 GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, gbuffer_depth_tex_, 0);
+
+    GLuint gbuf_attach = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &gbuf_attach);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] GBuffer FBO incomplete\n";
+
+    // ── SSAO FBO（オクルージョン係数, R16F） ──────────────────────────────────
+    if (ssao_fbo_) {
+        glDeleteFramebuffers(1, &ssao_fbo_);
+        glDeleteTextures(1, &ssao_color_tex_);
+    }
+    glGenFramebuffers(1, &ssao_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+
+    glGenTextures(1, &ssao_color_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, ssao_color_tex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] SSAO FBO incomplete\n";
+
+    // ── SSAO Blur FBO（ブラー後, RGBA16F） ───────────────────────────────────
+    if (ssao_blur_fbo_) {
+        glDeleteFramebuffers(1, &ssao_blur_fbo_);
+        glDeleteTextures(1, &ssao_blur_tex_);
+    }
+    glGenFramebuffers(1, &ssao_blur_fbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+
+    glGenTextures(1, &ssao_blur_tex_);
+    glBindTexture(GL_TEXTURE_2D, ssao_blur_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, ssao_blur_tex_, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        std::cerr << "[Renderer] SSAO Blur FBO incomplete\n";
+
+    // 初期値を 1.0（オクルージョンなし）でクリアしておく
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// beginGBufferPass() — GBufferパス開始（法線と深度を書き込む）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::beginGBufferPass() {
+    if (!gbuffer_fbo_) return;
+    glBindFramebuffer(GL_FRAMEBUFFER, gbuffer_fbo_);
+    glViewport(0, 0, width_, height_);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawChunkGBuffer() — GBufferパスでチャンクを描画（法線出力のみ）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawChunkGBuffer(const Chunk* chunk,
+                                const float* view4x4, const float* proj4x4) {
+    if (!chunk->gpu.uploaded || chunk->gpu.idx_count == 0) return;
+
+    glm::mat4 model = glm::translate(
+        glm::mat4(1.0f),
+        glm::vec3(
+            static_cast<float>(chunk->pos.x) * static_cast<float>(CHUNK_SIZE_X),
+            0.0f,
+            static_cast<float>(chunk->pos.z) * static_cast<float>(CHUNK_SIZE_Z)));
+    glm::mat4 view = glm::make_mat4(view4x4);
+    glm::mat4 proj = glm::make_mat4(proj4x4);
+    glm::mat4 mvp        = proj * view * model;
+    glm::mat4 model_view = view * model;
+
+    gbuffer_shader_.use();
+    gbuffer_shader_.setMat4("uMVP",       glm::value_ptr(mvp));
+    gbuffer_shader_.setMat4("uModelView", glm::value_ptr(model_view));
+
+    glBindVertexArray(chunk->gpu.vao);
+    glDrawElements(GL_TRIANGLES,
+                   static_cast<GLsizei>(chunk->gpu.idx_count),
+                   GL_UNSIGNED_INT,
+                   nullptr);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// endGBufferPass() — GBufferパス終了
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::endGBufferPass() {
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, width_, height_);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// computeSSAO() — SSAOパスとブラーパスを実行して ssao_blur_tex_ に書き込む
+//
+// 1. SSAO FBO にオクルージョン係数を計算
+// 2. Blur FBO で 4x4 ボックスブラーをかけてノイズを除去
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::computeSSAO(const float* proj4x4) {
+    if (!ssao_fbo_ || !gbuffer_fbo_) return;
+
+    glm::mat4 proj    = glm::make_mat4(proj4x4);
+    glm::mat4 inv_proj = glm::inverse(proj);
+
+    glDisable(GL_DEPTH_TEST);
+
+    // ── SSAOパス ─────────────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    ssao_shader_.use();
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_normal_tex_);
+    ssao_shader_.setInt("gNormal", 0);
+
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, gbuffer_depth_tex_);
+    ssao_shader_.setInt("gDepth", 1);
+
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, ssao_noise_tex_);
+    ssao_shader_.setInt("uNoiseTex", 2);
+
+    ssao_shader_.setMat4("uProjection",    glm::value_ptr(proj));
+    ssao_shader_.setMat4("uInvProjection", glm::value_ptr(inv_proj));
+    ssao_shader_.setVec2("uNoiseScale",
+                         (float)width_ / 4.0f, (float)height_ / 4.0f);
+
+    for (int i = 0; i < SSAO_SAMPLES; ++i) {
+        char name[32];
+        std::snprintf(name, sizeof(name), "uSamples[%d]", i);
+        ssao_shader_.setVec3(name,
+                             ssao_kernel_[i].x,
+                             ssao_kernel_[i].y,
+                             ssao_kernel_[i].z);
+    }
+
+    glBindVertexArray(ssao_quad_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    // ── Blur パス ─────────────────────────────────────────────────────────────
+    glBindFramebuffer(GL_FRAMEBUFFER, ssao_blur_fbo_);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    ssao_blur_shader_.use();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, ssao_color_tex_);
+    ssao_blur_shader_.setInt("uSSAOInput", 0);
+
+    glBindVertexArray(ssao_quad_vao_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glEnable(GL_DEPTH_TEST);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // endFrame() — フレームの終了処理（ダブルバッファリング）
 //
 // 【ダブルバッファリングとは？】
@@ -620,6 +1659,7 @@ void Renderer::onResize(int w, int h) {
     glViewport(0, 0, w, h);  // 描画領域をウィンドウ全体に合わせる
     width_  = w;
     height_ = h;
+    resizeSSAOBuffers(w, h);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -713,4 +1753,242 @@ void Renderer::setTimeOfDay(float t) {
 
     // 太陽が水平線より下のときは拡散光（太陽光）を出さない
     if (elev < 0.0f) sun_strength_ = 0.0f;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawStevePart() — ユニットボックスに MVP とカラーを渡して1パーツ描画
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawStevePart(const glm::mat4& mvp, const glm::mat4& model,
+                               const float* color) {
+    entity_shader_.setMat4("uMVP",   glm::value_ptr(mvp));
+    entity_shader_.setMat4("uModel", glm::value_ptr(model));
+    entity_shader_.setVec3("uColor", color[0], color[1], color[2]);
+    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, nullptr);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawRemotePlayers() — Steve 風キャラクターで他プレイヤーを描画する
+//
+// Steve のパーツ（足元 y=0 基準、ユニット: 1ブロック）:
+//   Head:  中心 (0, 1.55, 0)、0.5×0.5×0.5
+//   Torso: 中心 (0, 0.975, 0)、0.5×0.75×0.25
+//   Arms:  肩 (±0.35, 1.30, 0) をピボットに垂れ下がる 0.20×0.65×0.20
+//   Legs:  股関節 (±0.185, 0.65, 0) をピボットに垂れ下がる 0.23×0.65×0.23
+//
+// アニメーション: walk_phase に応じて腕・脚を X 軸回転でスイング。
+//   左脚 ＝ 右腕が同位相、右脚 ＝ 左腕が同位相（自然な歩き）。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
+                                  const float* view4x4, const float* proj4x4) {
+    if (players.empty() || !entity_vao_) return;
+
+    // Torso colors per player (head/arms = skin, legs = jeans)
+    static const float kTorsoColors[][3] = {
+        {0.25f, 0.35f, 0.75f},  // blue
+        {0.70f, 0.22f, 0.22f},  // red
+        {0.20f, 0.58f, 0.20f},  // green
+        {0.75f, 0.50f, 0.08f},  // orange
+        {0.55f, 0.20f, 0.72f},  // purple
+        {0.12f, 0.55f, 0.60f},  // teal
+    };
+    static const float kSkin[]  = {0.83f, 0.66f, 0.52f};
+    static const float kJeans[] = {0.20f, 0.22f, 0.50f};
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir",
+                            sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    for (auto& [id, rp] : players) {
+        // Camera position → feet position (eye is 1.62 blocks above feet)
+        static constexpr float EYE_H = 1.62f;
+
+        // Global transform: translate to feet, then rotate body to face yaw.
+        // yaw=0 → front=(1,0,0) (+X); model default forward is +Z, so yaw-90°.
+        glm::mat4 global = glm::translate(glm::mat4(1.0f),
+                                           glm::vec3(rp.x, rp.y - EYE_H, rp.z));
+        global = glm::rotate(global,
+                              glm::radians(rp.yaw - 90.0f),
+                              glm::vec3(0.f, 1.f, 0.f));
+
+        // Walking animation: ±30° limb swing
+        const float swing = glm::radians(sinf(rp.walk_phase) * 30.0f);
+        const float* tc   = kTorsoColors[id % 6];
+
+        // ── Head (no animation) ─────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.50f, 0.50f);
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 1.55f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Torso (no animation) ────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.75f, 0.25f);
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 0.975f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, tc);
+        }
+
+        // ── Left Arm  (pivot = left shoulder, swings same as right leg) ────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.35f, 1.30f, 0.f));
+            m = glm::rotate(m, -swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Right Arm (pivot = right shoulder, swings same as left leg) ────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.35f, 1.30f, 0.f));
+            m = glm::rotate(m,  swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Left Leg (pivot = left hip) ─────────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.185f, 0.65f, 0.f));
+            m = glm::rotate(m,  swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kJeans);
+        }
+
+        // ── Right Leg (pivot = right hip) ───────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.185f, 0.65f, 0.f));
+            m = glm::rotate(m, -swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kJeans);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawMobs() — ゾンビを描画する
+//
+// ゾンビのポーズ（Steve との違い）:
+//   ・胴体を約 20° 前傾させる（hunched）
+//   ・腕を前方約 70° 上げる（zombie arms）
+//   ・皮膚色: 緑がかった灰色
+//   ・胴体: 暗いティール
+//   ・脚: 褐色グレー
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawMobs(const std::vector<Zombie>& zombies,
+                         const float* view4x4, const float* proj4x4) {
+    if (zombies.empty() || !entity_vao_) return;
+
+    static const float kSkin[]  = {0.35f, 0.52f, 0.28f};  // green-grey
+    static const float kShirt[] = {0.13f, 0.22f, 0.18f};  // dark teal
+    static const float kPants[] = {0.22f, 0.18f, 0.14f};  // mud brown
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir",
+                            sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    for (const Zombie& z : zombies) {
+        // Zombie position is already feet. No EYE_H offset needed.
+        // Body faces yaw direction (same convention as camera: yaw-90°).
+        glm::mat4 global = glm::translate(glm::mat4(1.0f),
+                                           glm::vec3(z.x, z.y, z.z));
+        global = glm::rotate(global,
+                              glm::radians(z.yaw - 90.0f),
+                              glm::vec3(0.f, 1.f, 0.f));
+
+        // Walk swing for legs; arms are mostly raised, with smaller swing
+        const float leg_swing = glm::radians(sinf(z.walk_phase) * 28.0f);
+        const float arm_raise = glm::radians(-70.0f);   // zombie arms forward
+        const float arm_swing = glm::radians(sinf(z.walk_phase) * 12.0f);
+
+        // ── Torso: hunched ~20° forward ─────────────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.70f, 0.25f);
+            // Pivot at torso centre for tilt
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 0.975f, 0.f));
+            m = glm::rotate(m, glm::radians(-5.0f), glm::vec3(1.f, 0.f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kShirt);
+        }
+
+        // ── Head: sits on top of hunched torso ──────────────────────────
+        {
+            glm::vec3 sz(0.50f, 0.50f, 0.50f);
+            // Offset from torso top, corrected for tilt
+            glm::mat4 m = glm::translate(global, glm::vec3(0.f, 1.30f, 0.02f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Left Arm: raised forward ~70° ───────────────────────────────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.35f, 1.30f, 0.f));
+            m = glm::rotate(m, arm_raise + arm_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Right Arm: raised forward ~70° (opposite swing) ─────────────
+        {
+            glm::vec3 sz(0.20f, 0.65f, 0.20f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.35f, 1.30f, 0.f));
+            m = glm::rotate(m, arm_raise - arm_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kSkin);
+        }
+
+        // ── Left Leg ─────────────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3(-0.185f, 0.65f, 0.f));
+            m = glm::rotate(m,  leg_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kPants);
+        }
+
+        // ── Right Leg ────────────────────────────────────────────────────
+        {
+            glm::vec3 sz(0.23f, 0.65f, 0.23f);
+            glm::mat4 m = glm::translate(global, glm::vec3( 0.185f, 0.65f, 0.f));
+            m = glm::rotate(m, -leg_swing, glm::vec3(1.f, 0.f, 0.f));
+            m = glm::translate(m, glm::vec3(0.f, -sz.y * 0.5f, 0.f));
+            m = glm::scale(m, sz);
+            drawStevePart(vp * m, m, kPants);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
 }

@@ -29,8 +29,12 @@
 #include "world/world.hpp"
 #include "player/player.hpp"
 #include "streaming/chunk_manager.hpp"
+#include "network/client.hpp"
+#include "mob/mob_manager.hpp"
 
 #include <chrono>
+#include <thread>
+#include <string>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -135,6 +139,38 @@ static void rebuildModified(int wx, int wz, ChunkManager& mgr) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// インベントリ操作ヘルパー
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ブロックをインベントリに1個追加する。既存スタックに積む → 空きスロットを探す。
+static void inventoryAdd(Inventory& inv, BlockType type) {
+    if (type == BlockType::Air || type == BlockType::Water ||
+        type == BlockType::ShortGrass) return;
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        if (inv.slots[i].type == type && inv.slots[i].count < STACK_MAX) {
+            ++inv.slots[i].count;
+            return;
+        }
+    }
+    for (int i = 0; i < HOTBAR_SIZE; ++i) {
+        if (inv.slots[i].type == BlockType::Air) {
+            inv.slots[i] = {type, 1};
+            return;
+        }
+    }
+    // インベントリ満杯: 無音で捨てる
+}
+
+// 選択スロットから1個消費する。成功なら true を返す。
+static bool inventoryConsume(Inventory& inv) {
+    ItemStack& s = inv.slots[inv.selected];
+    if (s.type == BlockType::Air || s.count <= 0) return false;
+    --s.count;
+    if (s.count == 0) s = {};
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Engine の内部実装データ（pImpl パターン）
 // ─────────────────────────────────────────────────────────────────────────────
 // 1日の長さ（リアル時間の秒数）。600秒 = 10分で昼夜1サイクル。
@@ -146,9 +182,22 @@ struct Engine::Impl {
     Player        player;      // プレイヤー移動・物理担当
     ChunkManager* chunk_mgr = nullptr;  // チャンクの読み込み・破棄担当
 
-    BlockType selected_block = BlockType::Stone;  // 現在選択中のブロック種類
-    float     time_of_day    = 0.35f;  // 時刻（0=深夜, 0.25=日の出, 0.5=正午, 0.75=日の入り）
-    bool      show_minimap_  = true;   // M キーでトグル
+    Inventory     inventory;
+    float         time_of_day    = 0.35f;
+    bool          show_minimap_  = true;
+    bool          show_player_list_ = false;
+    bool          show_stats_ = false;
+
+    // Multiplayer
+    NetworkClient net_client;
+    bool          multiplayer    = false;
+    float         net_pos_timer  = 0.0f;
+    float         mob_sync_timer = 0.0f;   // ホスト用: mob送信インターバル
+
+    // Mobs
+    MobManager    mob_mgr;
+    float         player_health     = 20.0f;
+    float         player_max_health = 20.0f;
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -156,6 +205,32 @@ struct Engine::Impl {
 // ─────────────────────────────────────────────────────────────────────────────
 Engine::Engine()  : impl_(std::make_unique<Impl>()) {}
 Engine::~Engine() { shutdown(); }
+
+bool Engine::connectToServer(const char* host, uint16_t port) {
+    if (!impl_->net_client.connect(host, port)) {
+        fprintf(stderr, "[Engine] Failed to connect to %s:%u\n", host, port);
+        return false;
+    }
+    // Wait briefly for WELCOME packet (server sends it synchronously on connect).
+    // poll() a few times to receive it before the game loop starts.
+    for (int i = 0; i < 50 && !impl_->net_client.isConnected(); ++i) {
+        std::vector<NetworkEvent> ev;
+        impl_->net_client.poll(ev);
+        // short busy-wait; acceptable once at startup
+        using namespace std::chrono_literals;
+        std::this_thread::sleep_for(10ms);
+    }
+    if (!impl_->net_client.isConnected()) {
+        fprintf(stderr, "[Engine] Did not receive WELCOME from server\n");
+        return false;
+    }
+    // Override world seed so terrain matches server's world.
+    impl_->world.setSeed(impl_->net_client.seed());
+    impl_->multiplayer = true;
+    fprintf(stderr, "[Engine] Multiplayer ready  seed=%u\n",
+            impl_->net_client.seed());
+    return true;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // init() — ウィンドウ・OpenGL・各システムの初期化
@@ -212,6 +287,7 @@ bool Engine::init(uint32_t seed, int width, int height) {
 
     // ── ワールド（地形）の初期化 ───────────────────────────────────────────────
     impl_->world.setSeed(seed);
+    impl_->world.setSaveDir("saves/" + std::to_string(seed));
 
     // ── プレイヤー・カメラの初期化 ─────────────────────────────────────────────
     impl_->player.init(window_);
@@ -284,10 +360,10 @@ void Engine::run() {
 
     // ── メインゲームループ ───────────────────────────────────────────────────
     auto prev   = Clock::now();
-    float fps_timer       = 0.0f;
-    int   fps_frames      = 0;
-    int   fps_display     = 0;
-    float rd_adjust_timer = 0.0f;  // レンダー距離調整のクールダウンタイマー（秒）
+    float fps_timer   = 0.0f;
+    int   fps_frames  = 0;
+    int   fps_display = 0;
+    float elapsed_s   = 0.0f;  // 起動からの経過秒数（雲アニメーション用）
 
     while (running_) {
         // ── デルタタイム計算 ──────────────────────────────────────────────────
@@ -299,8 +375,8 @@ void Engine::run() {
         prev      = now;
         // dtを上限0.1秒でクランプ。カクついた瞬間に物理が暴走するのを防ぐ。
         if (dt > 0.1f) dt = 0.1f;
-        fps_timer       += dt;
-        rd_adjust_timer += dt;
+        fps_timer += dt;
+        elapsed_s += dt;
         ++fps_frames;
         // 0.25秒ごとにFPSを更新（毎フレーム更新すると数字が激しく変わって読めない）
         if (fps_timer >= 0.25f) {
@@ -309,27 +385,16 @@ void Engine::run() {
             fps_frames = 0;
         }
 
-        // ── 動的レンダー距離 ─────────────────────────────────────────────────
-        // FPSに合わせてチャンクの描画距離を自動調整する。
-        //   30FPS未満 → 描画距離を縮小（GPU負荷を下げる）
-        //   55FPS超過 → 描画距離を拡大（余裕があるので遠くまで見せる）
-        // 頻繁に変えると振動するため、1秒に1回だけ調整する（ヒステリシス）。
-        if (rd_adjust_timer >= 1.0f) {
-            rd_adjust_timer = 0.0f;
-            int cur = impl_->chunk_mgr->renderDistance();
-            if (fps_display > 0 && fps_display < 30 && cur > RENDER_DISTANCE_MIN) {
-                impl_->chunk_mgr->setRenderDistance(cur - 1);
-            } else if (fps_display > 55 && cur < RENDER_DISTANCE_MAX) {
-                impl_->chunk_mgr->setRenderDistance(cur + 1);
-            }
-        }
-
         // ── プレイヤー入力・移動・物理 ────────────────────────────────────────
         // isSolid: 「このブロックは固体か？」を調べる関数。
         // プレイヤーのAABB（当たり判定の箱）が固体ブロックにめり込まないように使う。
         auto isSolid = [&](int x, int y, int z) {
             BlockType t = impl_->world.getWorldBlock(x, y, z);
-            return t != BlockType::Air && t != BlockType::Water;
+            return t != BlockType::Air
+                && t != BlockType::Water
+                && t != BlockType::ShortGrass
+                && t != BlockType::Flower
+                && t != BlockType::Mushroom;
         };
         // isWater: 「このブロックは水か？」を調べる関数。
         // 水中では重力・移動速度が変わる。
@@ -360,55 +425,185 @@ void Engine::run() {
             prev_m = cur_m;
         }
 
-        // ── ブロック種類の選択・操作 ─────────────────────────────────────────
+        // ── Tab キー: 接続中プレイヤー一覧表示切り替え ───────────────────────
         {
             InputHandler& inp = impl_->player.input();
+            static bool prev_tab = false;
+            bool cur_tab = inp.isHeld(GLFW_KEY_TAB);
+            if (cur_tab && !prev_tab)
+                impl_->show_player_list_ = !impl_->show_player_list_;
+            prev_tab = cur_tab;
+        }
 
-            // キー 1〜6 で設置ブロックを切り替え
-            for (int k = GLFW_KEY_1; k <= GLFW_KEY_6; ++k) {
-                if (inp.isHeld(k)) {
-                    impl_->selected_block =
-                        static_cast<BlockType>(k - GLFW_KEY_1 + 1);
-                    break;
-                }
+        // ── F3 キー: FPS / triangles / cubes / chunks 表示切り替え ───────────
+        {
+            InputHandler& inp = impl_->player.input();
+            static bool prev_f3 = false;
+            bool cur_f3 = inp.isHeld(GLFW_KEY_F3);
+            if (cur_f3 && !prev_f3)
+                impl_->show_stats_ = !impl_->show_stats_;
+            prev_f3 = cur_f3;
+        }
+
+        // ── ホットバー選択・ブロック操作 ─────────────────────────────────────
+        {
+            InputHandler& inp = impl_->player.input();
+            Inventory&    inv = impl_->inventory;
+
+            // キー 1〜9: ホットバースロットを選択（ワンショット: 前フレームと差分）
+            static bool prev_num[9] = {};
+            for (int k = 0; k < 9; ++k) {
+                bool cur = inp.isHeld(GLFW_KEY_1 + k);
+                if (cur && !prev_num[k]) inv.selected = k;
+                prev_num[k] = cur;
             }
+
+            // スクロールホイールでスロットを循環
+            float sw = inp.scrollY();
+            if (sw < -0.5f)
+                inv.selected = (inv.selected + 1) % HOTBAR_SIZE;
+            else if (sw > 0.5f)
+                inv.selected = (inv.selected + HOTBAR_SIZE - 1) % HOTBAR_SIZE;
 
             // カーソルがキャプチャされているときだけブロック操作を受け付ける
             if (inp.isCursorCaptured()) {
-                // カメラ正面方向にレイを飛ばして当たったブロックを特定
                 glm::vec3 pos   = impl_->player.camera().position();
                 glm::vec3 front = impl_->player.camera().front();
                 RayHit hit = castRay(pos, front, 6.0f, impl_->world);
 
-                if (hit.hit) {
-                    // 左クリック: 当たったブロックを空気に置き換える（壊す）
-                    if (inp.wasLeftClicked()) {
+                // 左クリック: ブロックを壊してインベントリに追加 OR ゾンビを攻撃
+                if (inp.wasLeftClicked()) {
+                    if (hit.hit) {
+                        BlockType broken = impl_->world.getWorldBlock(
+                            hit.bx, hit.by, hit.bz);
                         impl_->world.setWorldBlock(hit.bx, hit.by, hit.bz,
                                                    BlockType::Air);
                         rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
+                        inventoryAdd(inv, broken);
+                        if (impl_->multiplayer)
+                            impl_->net_client.sendBlockChange(
+                                hit.bx, hit.by, hit.bz,
+                                static_cast<uint8_t>(BlockType::Air));
+                    } else {
+                        impl_->mob_mgr.playerMeleeAttack(
+                            pos.x, pos.y, pos.z, front.x, front.z);
                     }
-                    // 右クリック: 当たる直前のマスに選択中ブロックを置く
-                    if (inp.wasRightClicked()) {
+                }
+                // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
+                if (hit.hit && inp.wasRightClicked()) {
+                    BlockType to_place = inv.slots[inv.selected].type;
+                    if (to_place != BlockType::Air && inventoryConsume(inv)) {
                         impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
-                                                   impl_->selected_block);
+                                                   to_place);
                         rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                        if (impl_->multiplayer)
+                            impl_->net_client.sendBlockChange(
+                                hit.nx, hit.ny, hit.nz,
+                                static_cast<uint8_t>(to_place));
                     }
                 }
             }
         }
 
         // ── 昼夜サイクル更新 ─────────────────────────────────────────────────
-        // time_of_day を少しずつ進め、1.0になったら0に戻す（ループ）。
-        // 600秒（10分）で0→1になる速さ。
+        // マルチプレイ時はサーバーからの TimeSync で時刻が上書きされるが、
+        // 受信間隔（5秒）の間は各クライアントが自分で進める。
         impl_->time_of_day += dt / DAY_DURATION;
         if (impl_->time_of_day >= 1.0f) impl_->time_of_day -= 1.0f;
-        // レンダラーに時刻を伝え、空の色・太陽方向・光の強さを更新してもらう
         impl_->renderer.setTimeOfDay(impl_->time_of_day);
+
+        // ── マルチプレイ: ネットワーク送受信 ────────────────────────────────────
+        glm::vec3 ppos = impl_->player.camera().position();
+        const bool is_mob_host = !impl_->multiplayer ||
+                                  impl_->net_client.playerId() == 1;
+        if (impl_->multiplayer) {
+            impl_->net_pos_timer += dt;
+            if (impl_->net_pos_timer >= 0.05f) {   // ~20 Hz
+                impl_->net_pos_timer = 0.0f;
+                impl_->net_client.updatePosition(
+                    ppos.x, ppos.y, ppos.z,
+                    impl_->player.camera().getYaw(),
+                    impl_->player.camera().getPitch());
+            }
+            std::vector<NetworkEvent> events;
+            impl_->net_client.poll(events);
+            for (auto& ev : events) {
+                if (ev.kind == NetworkEvent::Kind::BlockChange) {
+                    auto bt = static_cast<BlockType>(ev.block_type);
+                    impl_->world.setWorldBlock(ev.bx, ev.by, ev.bz, bt);
+                    rebuildModified(ev.bx, ev.bz, *impl_->chunk_mgr);
+                } else if (ev.kind == NetworkEvent::Kind::TimeSync) {
+                    // サーバーの時刻に合わせる（小さなジャンプは許容）
+                    impl_->time_of_day = ev.time_of_day;
+                } else if (ev.kind == NetworkEvent::Kind::MobUpdate) {
+                    if (!is_mob_host)
+                        impl_->mob_mgr.setZombies(std::move(ev.mobs));
+                }
+            }
+            // Update walking animation phase for each remote player.
+            for (auto& [id, rp] : impl_->net_client.remotePlayers()) {
+                if (!rp.initialized) {
+                    rp.prev_x     = rp.x;
+                    rp.prev_z     = rp.z;
+                    rp.initialized = true;
+                }
+                float dx    = rp.x - rp.prev_x;
+                float dz    = rp.z - rp.prev_z;
+                float speed = std::sqrt(dx * dx + dz * dz) / dt;
+                if (speed > 0.3f)
+                    rp.walk_phase += dt * 8.0f;
+                rp.prev_x = rp.x;
+                rp.prev_z = rp.z;
+            }
+        }
+
+        // ── モブ更新 ────────────────────────────────────────────────────────
+        // ホスト（シングルプレイまたはplayer_id==1）のみ物理・AIを実行。
+        // 非ホストはサーバー経由で受け取ったzombies_をそのまま描画する。
+        {
+            float dmg = 0.0f;
+            if (is_mob_host) {
+                // ホスト: mob AI を動かし、マルチプレイ中は状態を送信する
+                dmg = impl_->mob_mgr.update(
+                    dt,
+                    ppos.x, ppos.y, ppos.z,
+                    impl_->time_of_day,
+                    isSolid,
+                    impl_->world);
+                if (impl_->multiplayer) {
+                    impl_->mob_sync_timer -= dt;
+                    if (impl_->mob_sync_timer <= 0.0f) {
+                        impl_->mob_sync_timer = 0.1f;  // 10 Hz
+                        const auto& zs = impl_->mob_mgr.zombies();
+                        uint8_t count = (uint8_t)std::min((int)zs.size(), 255);
+                        std::vector<uint8_t> buf;
+                        buf.reserve(1 + count * sizeof(PktMobEntry));
+                        buf.push_back(count);
+                        for (uint8_t i = 0; i < count; ++i) {
+                            PktMobEntry e;
+                            e.x = zs[i].x; e.y = zs[i].y; e.z = zs[i].z;
+                            e.yaw = zs[i].yaw; e.health = zs[i].health;
+                            e.state = (uint8_t)zs[i].state;
+                            buf.insert(buf.end(),
+                                       reinterpret_cast<uint8_t*>(&e),
+                                       reinterpret_cast<uint8_t*>(&e) + sizeof(e));
+                        }
+                        impl_->net_client.sendRaw(PacketType::MobUpdate,
+                                                   buf.data(), (uint16_t)buf.size());
+                    }
+                }
+            }
+            impl_->player_health -= dmg;
+            if (impl_->player_health <= 0) {
+                // シンプルなリスポーン: 体力を全回復
+                impl_->player_health = impl_->player_max_health;
+                fprintf(stderr, "[Game] Player died and respawned.\n");
+            }
+        }
 
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
         // 毎フレーム数チャンクずつ処理し、ゲームが止まらないようにする。
-        glm::vec3 ppos = impl_->player.camera().position();
         impl_->chunk_mgr->update(ppos.x, ppos.z, frame_);
 
         // ── 行列の計算 ───────────────────────────────────────────────────────
@@ -438,19 +633,60 @@ void Engine::run() {
         frustum.extractFromVP(proj * view);  // Proj×View から視錐台の6平面を取り出す
 
         // ── 描画 ─────────────────────────────────────────────────────────────
+
+        // パス0: シャドウマップ生成 (太陽視点で深度のみ描画)
+        // カメラ外の地形(洞窟の天井など)も影を落とすため、全ロード済みチャンクを使う
+        impl_->renderer.updateShadowMatrix(ppos.x, ppos.y, ppos.z);
+        impl_->renderer.beginShadowPass();
+        {
+            auto all_chunks = impl_->chunk_mgr->getAllLoadedChunks();
+            for (Chunk* c : all_chunks)
+                impl_->renderer.drawChunkShadow(c);
+        }
+        impl_->renderer.endShadowPass();
+
+        // フラスタムカリング済みの可視チャンクリストを取得（後続パスで共用）
+        auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
+        int visible_triangles = 0;
+        int visible_cubes = 0;
+        if (impl_->show_stats_) {
+            for (const Chunk* c : visible) {
+                int indices = c->gpu.idx_count + c->gpu.idx_count_water;
+                visible_triangles += indices / 3;
+                visible_cubes += indices / 36;
+            }
+        }
+
+        // パス1: GBufferパス（ビュー空間法線 + 深度をテクスチャに書き込む）
+        impl_->renderer.beginGBufferPass();
+        for (Chunk* c : visible)
+            impl_->renderer.drawChunkGBuffer(c, view4x4, proj4x4);
+        impl_->renderer.endGBufferPass();
+
+        // パス2: SSAO + ブラー計算（ssao_blur_tex_ に結果を書き込む）
+        impl_->renderer.computeSSAO(proj4x4);
+
         impl_->renderer.beginFrame();  // 画面をクリア
 
         // 空（スカイボックス）を最初に描画する（最も遠い背景として）
         impl_->renderer.drawSkybox(sky_view4x4, proj4x4);
 
-        // フラスタムカリング済みの可視チャンクリストを取得
-        auto visible = impl_->chunk_mgr->getVisibleChunks(frustum);
-
-        // パス1: 不透明なブロック（石・土・草など）を描画
+        // パス3: 不透明なブロック（石・土・草など）を描画
         // 深度バッファに書き込むので、後で描く水がその後ろに隠れる。
         for (Chunk* c : visible) {
             impl_->renderer.drawChunk(c, view4x4, proj4x4);
         }
+
+        // リモートプレイヤーを Steve モデルで描画
+        if (impl_->multiplayer)
+            impl_->renderer.drawRemotePlayers(
+                impl_->net_client.remotePlayers(), view4x4, proj4x4);
+
+        // モブ（ゾンビ）を描画
+        impl_->renderer.drawMobs(impl_->mob_mgr.zombies(), view4x4, proj4x4);
+
+        // 3D 雲レイヤーを描画（不透明ブロックの後、水の前）
+        impl_->renderer.drawClouds(view4x4, proj4x4, ppos.x, ppos.z, elapsed_s);
 
         // パス2: 水（半透明）を描画
         // 深度バッファには書き込まない（読むだけ）。
@@ -468,6 +704,26 @@ void Engine::run() {
                                 (int)std::floor(ppos.x),
                                 (int)std::floor(ppos.y),
                                 (int)std::floor(ppos.z));
+
+        if (impl_->show_stats_) {
+            impl_->renderer.drawStats(
+                fps_display,
+                visible_triangles,
+                visible_cubes,
+                static_cast<int>(visible.size()),
+                static_cast<int>(impl_->chunk_mgr->loadedCount()),
+                impl_->show_minimap_);
+        }
+
+        if (impl_->show_player_list_) {
+            impl_->renderer.drawPlayerList(
+                impl_->net_client.playerId(),
+                impl_->net_client.remotePlayers(),
+                impl_->multiplayer);
+        }
+
+        // ホットバー（画面下中央）を描画
+        impl_->renderer.drawHotbar(impl_->inventory);
 
         // ミニマップ（左上）を更新して描画（M キーでトグル）
         if (impl_->show_minimap_) {

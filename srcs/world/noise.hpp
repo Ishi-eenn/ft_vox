@@ -20,9 +20,6 @@ public:
     // 3D Perlin — horizontal cave carving (Y compressed → flat tunnels) [-1, 1]
     float getCaveHoriz(float x, float y, float z) const;
 
-    // 3D Perlin — surface cave entrance (isotropic blobs, high threshold → rounded openings) [-1, 1]
-    float getCaveEntrance(float x, float y, float z) const;
-
     // 2D low-frequency Perlin — biome temperature [-1, 1]  (-1=cold, +1=hot)
     float getTemperature(float x, float z) const;
 
@@ -34,7 +31,6 @@ private:
     void* valley_noise_      = nullptr;
     void* cave_noise_         = nullptr;
     void* cave_horiz_noise_   = nullptr;
-    void* cave_entrance_noise_= nullptr;  // 地表入口用（等方性、高閾値で丸い開口部）
     void* temp_noise_        = nullptr;
     void* humid_noise_       = nullptr;
 };

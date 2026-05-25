@@ -39,6 +39,7 @@ void InputHandler::init(GLFWwindow* window) {
     glfwSetMouseButtonCallback(window,      mouseButtonCallback);  // マウスクリック
     glfwSetWindowFocusCallback(window,      focusCallback);        // ウィンドウフォーカス
     glfwSetFramebufferSizeCallback(window,  resizeCallback);       // ウィンドウリサイズ
+    glfwSetScrollCallback(window,           scrollCallback);       // スクロールホイール
 
     captureCursor();  // 起動時からカーソルをキャプチャ
 }
@@ -73,6 +74,7 @@ void InputHandler::newFrame() {
     dy_ = 0.0f;
     left_clicked_  = false;
     right_clicked_ = false;
+    scroll_y_      = 0.0f;
 }
 
 // キーが現在押されているかを返す（キーコードは GLFW_KEY_W などの定数）
@@ -167,4 +169,11 @@ void InputHandler::resizeCallback(GLFWwindow* w, int width, int height) {
     self->resize_w_ = width;
     self->resize_h_ = height;
     self->resized_  = true;  // Engine がフレーム終わりに確認してビューポートを更新する
+}
+
+// スクロールホイールが動いたときに呼ばれる
+void InputHandler::scrollCallback(GLFWwindow* w, double /*xoff*/, double yoff) {
+    auto* self = (InputHandler*)glfwGetWindowUserPointer(w);
+    if (!self || !self->cursor_captured_) return;
+    self->scroll_y_ += (float)yoff;
 }

@@ -121,7 +121,9 @@ void Player::update(float dt,
         }
     }
 
-    float speed = fast_mode_ ? PLAYER_SPEED_FAST : PLAYER_SPEED_NORMAL;
+    // fly中は常に20倍速、地上はShiftでスプリント(2倍)
+    float speed = fly_mode_ ? PLAYER_SPEED_FLY
+                             : (fast_mode_ ? PLAYER_SPEED_SPRINT : PLAYER_SPEED_NORMAL);
 
     // ── マウスで視点を操作 ────────────────────────────────────────────────────
     if (input_.isCursorCaptured()) {

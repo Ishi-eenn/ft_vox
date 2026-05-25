@@ -20,6 +20,9 @@ public:
     bool wasLeftClicked()  const { return left_clicked_;  }
     bool wasRightClicked() const { return right_clicked_; }
 
+    // Scroll wheel Y delta this frame (positive = up, reset each frame)
+    float scrollY() const { return scroll_y_; }
+
     // True when the main loop should exit
     bool shouldClose() const { return glfwWindowShouldClose(window_) != 0; }
 
@@ -40,6 +43,7 @@ public:
     static void mouseButtonCallback(GLFWwindow*, int button, int action, int mods);
     static void focusCallback      (GLFWwindow*, int focused);
     static void resizeCallback     (GLFWwindow*, int width, int height);
+    static void scrollCallback     (GLFWwindow*, double xoff, double yoff);
 
 private:
     static constexpr int KEY_COUNT = GLFW_KEY_LAST + 1;
@@ -51,6 +55,7 @@ private:
     float  dx_     = 0.0f, dy_    = 0.0f;
     bool   first_  = true;
 
+    float scroll_y_        = 0.0f;
     bool cursor_captured_ = false;
     bool left_clicked_    = false;
     bool right_clicked_   = false;

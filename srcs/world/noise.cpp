@@ -33,7 +33,6 @@ NoiseGen::NoiseGen() {
     valley_noise_      = new FastNoiseLite();
     cave_noise_        = new FastNoiseLite();
     cave_horiz_noise_  = new FastNoiseLite();
-    cave_entrance_noise_ = new FastNoiseLite();
     temp_noise_        = new FastNoiseLite();
     humid_noise_       = new FastNoiseLite();
 }
@@ -43,7 +42,6 @@ NoiseGen::~NoiseGen() {
     delete (FastNoiseLite*)valley_noise_;
     delete (FastNoiseLite*)cave_noise_;
     delete (FastNoiseLite*)cave_horiz_noise_;
-    delete (FastNoiseLite*)cave_entrance_noise_;
     delete (FastNoiseLite*)temp_noise_;
     delete (FastNoiseLite*)humid_noise_;
 }
@@ -97,14 +95,6 @@ void NoiseGen::setSeed(uint32_t seed) {
     chn->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
     chn->SetFrequency(0.020f);
 
-    // ── 地表入口ノイズ ── 等方性の丸い開口部を地表付近に作る ─────────────────
-    // 周波数 0.05: 特徴スケール ~20 ブロック → 半径 3〜6 ブロックの丸い洞窟口
-    // Yオフセットなし（等方性）なのでスパゲッティ方式の「地割れ」にならない
-    auto* cen = (FastNoiseLite*)cave_entrance_noise_;
-    cen->SetSeed((int)(seed ^ 0xCAFED00Du));
-    cen->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
-    cen->SetFrequency(0.05f);
-
     // ── 気温ノイズ ── バイオームの大きな区分けを作る ────────────────────────
     // 非常に低い周波数（0.0008）= 約1250ブロックで1サイクル → 広大なバイオーム域
     // オクターブ2で僅かな凹凸を加える
@@ -145,12 +135,6 @@ float NoiseGen::getCave(float x, float y, float z) const {
     // y が深くなるほど XZ がずれる → 斜め方向に伸びる洞窟
     // y * 0.5 で Y 方向を若干圧縮し、横への広がりを強調
     return ((FastNoiseLite*)cave_noise_)->GetNoise(x + y * 0.40f, y * 0.50f, z + y * 0.25f);
-}
-
-// 地表入口ノイズ（3D: 等方性 — Yオフセットなし → 丸い開口部）
-float NoiseGen::getCaveEntrance(float x, float y, float z) const {
-    // Y を若干圧縮（0.8倍）して縦長の丸い穴にする
-    return ((FastNoiseLite*)cave_entrance_noise_)->GetNoise(x, y * 0.8f, z);
 }
 
 // 斜め横長洞窟ノイズ（3D: Y 圧縮 + 斜めオフセット）

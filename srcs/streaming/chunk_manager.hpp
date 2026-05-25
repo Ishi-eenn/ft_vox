@@ -25,6 +25,9 @@ public:
     std::vector<Chunk*> getVisibleChunks(const Frustum& frustum) override;
     size_t loadedCount() const override { return loaded_.size(); }
 
+    // シャドウパス用: GPUメッシュがある全チャンクを返す (フラスタムカリングなし)
+    std::vector<Chunk*> getAllLoadedChunks() const;
+
     void destroyAll();
     void rebuildChunkAt(ChunkPos pos);
 
