@@ -927,6 +927,117 @@ static BlockType oreAt(int wx, int wy, int wz, uint32_t seed) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// carveSurfaceCaveEntrances() — 地表から歩いて入れる洞窟入口を掘る
+//
+// ノイズだけの地表穴は小さすぎたり地下トンネルと噛み合わないことがあるため、
+// 低頻度のグリッド候補から「入口 → 斜め通路 → 小部屋」を決定論的に生成する。
+// ─────────────────────────────────────────────────────────────────────────────
+static void carveSphere(Chunk& chunk, int chunk_wx, int chunk_wz,
+                        float cx, float cy, float cz,
+                        float rx, float ry, float rz) {
+    int min_x = (int)std::floor(cx - rx - 1.0f);
+    int max_x = (int)std::ceil (cx + rx + 1.0f);
+    int min_y = (int)std::floor(cy - ry - 1.0f);
+    int max_y = (int)std::ceil (cy + ry + 1.0f);
+    int min_z = (int)std::floor(cz - rz - 1.0f);
+    int max_z = (int)std::ceil (cz + rz + 1.0f);
+
+    for (int wz = min_z; wz <= max_z; ++wz) {
+        for (int wx = min_x; wx <= max_x; ++wx) {
+            int lx = wx - chunk_wx;
+            int lz = wz - chunk_wz;
+            if (lx < 0 || lx >= CHUNK_SIZE_X || lz < 0 || lz >= CHUNK_SIZE_Z)
+                continue;
+            for (int wy = min_y; wy <= max_y; ++wy) {
+                if (wy <= 1 || wy >= CHUNK_SIZE_Y - 1) continue;
+
+                float dx = ((float)wx + 0.5f - cx) / rx;
+                float dy = ((float)wy + 0.5f - cy) / ry;
+                float dz = ((float)wz + 0.5f - cz) / rz;
+                if (dx * dx + dy * dy + dz * dz > 1.0f) continue;
+
+                chunk.setBlock(lx, wy, lz, BlockType::Air);
+            }
+        }
+    }
+}
+
+static void carveSurfaceCaveEntrances(Chunk& chunk, const NoiseGen& noise,
+                                      uint32_t seed, int chunk_wx, int chunk_wz) {
+    constexpr int ENTRANCE_GRID = 80;
+    constexpr int MAX_REACH = 56;
+
+    int min_cx = (int)std::floor((float)(chunk_wx - MAX_REACH) / ENTRANCE_GRID);
+    int max_cx = (int)std::floor((float)(chunk_wx + CHUNK_SIZE_X + MAX_REACH) / ENTRANCE_GRID);
+    int min_cz = (int)std::floor((float)(chunk_wz - MAX_REACH) / ENTRANCE_GRID);
+    int max_cz = (int)std::floor((float)(chunk_wz + CHUNK_SIZE_Z + MAX_REACH) / ENTRANCE_GRID);
+
+    for (int gcx = min_cx; gcx <= max_cx; ++gcx) {
+        for (int gcz = min_cz; gcz <= max_cz; ++gcz) {
+            uint32_t h = hash3(gcx, (int)(seed ^ 0xC0A7E11u), gcz);
+            if ((h % 100u) >= 68u) continue;
+
+            int mouth_wx = gcx * ENTRANCE_GRID + ENTRANCE_GRID / 2
+                         + (int)((h >>  8) % 33u) - 16;
+            int mouth_wz = gcz * ENTRANCE_GRID + ENTRANCE_GRID / 2
+                         + (int)((h >> 16) % 33u) - 16;
+            int surface = computeTerrainHeight(noise, mouth_wx, mouth_wz);
+            if (surface <= SEA_LEVEL + 5 || surface >= CHUNK_SIZE_Y - 24)
+                continue;
+
+            float angle = ((float)((h >> 24) & 255u) / 255.0f) * 6.2831853f;
+            float dir_x = std::cos(angle);
+            float dir_z = std::sin(angle);
+            float side_x = -dir_z;
+            float side_z =  dir_x;
+            float depth = 24.0f + (float)((h >> 3) % 13u);
+            float run   = 18.0f + (float)((h >> 11) % 15u);
+            int steps = (int)std::ceil(std::max(depth, run)) + 8;
+
+            // 入口の口を広めに開け、地表から視認しやすくする。
+            carveSphere(chunk, chunk_wx, chunk_wz,
+                        (float)mouth_wx + 0.5f,
+                        (float)surface - 0.8f,
+                        (float)mouth_wz + 0.5f,
+                        3.2f, 2.8f, 3.2f);
+
+            float end_x = (float)mouth_wx;
+            float end_y = (float)surface - depth;
+            float end_z = (float)mouth_wz;
+
+            for (int i = 0; i <= steps; ++i) {
+                float t = (float)i / (float)steps;
+                float cx = (float)mouth_wx + dir_x * run * t;
+                float cz = (float)mouth_wz + dir_z * run * t;
+                float cy = (float)surface - 1.0f - depth * t
+                         + std::sin(t * 3.1415926f) * 1.8f;
+                float mouth_bonus = (t < 0.20f) ? (1.0f - t / 0.20f) * 0.9f : 0.0f;
+
+                carveSphere(chunk, chunk_wx, chunk_wz,
+                            cx + 0.5f, cy, cz + 0.5f,
+                            2.3f + mouth_bonus, 2.1f, 2.3f + mouth_bonus);
+                end_x = cx;
+                end_y = cy;
+                end_z = cz;
+            }
+
+            // 行き止まりに見えないよう、下部に小部屋と横穴を作る。
+            carveSphere(chunk, chunk_wx, chunk_wz,
+                        end_x + 0.5f, end_y, end_z + 0.5f,
+                        4.2f, 3.0f, 4.2f);
+            for (int i = 0; i <= 16; ++i) {
+                float t = (float)i / 16.0f;
+                carveSphere(chunk, chunk_wx, chunk_wz,
+                            end_x + side_x * 13.0f * t + 0.5f,
+                            end_y - 1.5f + std::sin(t * 3.1415926f) * 1.2f,
+                            end_z + side_z * 13.0f * t + 0.5f,
+                            2.0f, 1.8f, 2.0f);
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // generate() — チャンク1つ分の地形を生成する
 // ─────────────────────────────────────────────────────────────────────────────
 void TerrainGenerator::generate(Chunk& chunk) const {
@@ -997,19 +1108,9 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                     float fy    = (float)y;
                     float depth = (float)(surface - y);
 
-                    // ── 地表入口層（depth 0〜12）──────────────────────────────
-                    // 等方性の単一ノイズで丸い開口部を作る。
-                    // スパゲッティ方式（2ノイズの交線）は地表で「地割れ」になるため
-                    // ここでは使わず、高閾値の blob 方式で自然な穴形状にする。
-                    if (depth >= 0.0f && depth < 12.0f) {
-                        float ne = noise_.getCaveEntrance(wx, fy, wz);
-                        if (ne > 0.62f)
-                            t = BlockType::Air;
-                    }
-
                     // ── 地下トンネル層（depth 10以深）─────────────────────────
                     // スパゲッティ方式（n1²+n2²<threshold）で斜めトンネルを生成。
-                    // 地表入口と depth 10〜12 でオーバーラップし自然に繋がる。
+                    // 地表入口は carveSurfaceCaveEntrances() が別パスで掘る。
                     if (depth >= 10.0f && t != BlockType::Air) {
                         float n1 = noise_.getCave     (wx, fy, wz);
                         float n2 = noise_.getCaveHoriz(wx, fy, wz);
@@ -1029,6 +1130,8 @@ void TerrainGenerator::generate(Chunk& chunk) const {
             }
         }
     }
+
+    carveSurfaceCaveEntrances(chunk, noise_, seed_, world_x, world_z);
 
     // 村を先に生成することで、建物の石/木ブロックが後の木の生成チェック（Grass必須）を阻害する
     placeVillage(chunk, noise_, seed_, world_x, world_z);
