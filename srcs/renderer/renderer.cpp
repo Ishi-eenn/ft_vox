@@ -2174,3 +2174,63 @@ void Renderer::drawMobs(const std::vector<Zombie>& zombies,
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawFirstPersonHand() — ローカルプレイヤーの一人称ハンドアニメーション
+//
+// 画面右下に腕を表示する。歩行時にボブ、攻撃時にスイングアニメーション。
+// 全3Dコンテンツの後・HUD の前に呼ぶ。深度テスト無効で必ず最前面に表示。
+//
+// walk_phase       : 移動中に加算される位相値（radians）
+// attack_timer_norm: attack_sync_timer / 0.28f（1.0=攻撃直後, 0.0=待機）
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawFirstPersonHand(float walk_phase, float attack_timer_norm) {
+    if (!entity_vao_) return;
+
+    static const float kSkin[] = {0.83f, 0.66f, 0.52f};
+
+    const float aspect = static_cast<float>(width_) / static_cast<float>(height_);
+    // 正射影投影: パース歪み（台形）を排除してブロックを綺麗な長方形に見せる
+    // 範囲は FOV 70° で z=-1.5 に相当するビュー空間座標に合わせる
+    const float h = tanf(glm::radians(70.0f) * 0.5f) * 1.5f;  // ≈ 1.050
+    const float w = h * aspect;
+    const glm::mat4 proj = glm::ortho(-w, w, -h, h, 0.05f, 10.0f);
+    const glm::mat4 view = glm::mat4(1.0f);
+
+    // 歩行ボブ: 小さな上下 + 左右の揺れ
+    const float bob_y = sinf(walk_phase)        * 0.06f;
+    const float bob_x = sinf(walk_phase * 0.5f) * 0.03f;
+
+    // 攻撃スイング: Z軸回転で「振り下ろし」
+    // Y=-40° の状態でZ回転すると腕の先が左下に移動 → 振り下ろしに見える
+    const float progress  = 1.0f - std::clamp(attack_timer_norm, 0.0f, 1.0f);
+    const float swing_z   = sinf(progress * glm::pi<float>()) * glm::radians(45.0f);
+
+    // 腕のトランスフォーム: 長方形ブロックを右下コーナーに配置、Y軸で回転して側面を見せる
+    glm::mat4 m = glm::translate(glm::mat4(1.0f),
+        glm::vec3(0.82f + bob_x, -1.30f + bob_y, -1.5f));
+    m = glm::rotate(m, glm::radians(-40.0f),             glm::vec3(0.f, 1.f, 0.f));
+    m = glm::rotate(m, glm::radians(15.0f),              glm::vec3(1.f, 0.f, 0.f));
+    m = glm::rotate(m, glm::radians(10.0f) + swing_z,    glm::vec3(0.f, 0.f, 1.f));
+    m = glm::scale(m, glm::vec3(0.40f, 1.20f, 0.28f));  // Y方向に伸ばして下端を画面外へ
+
+    entity_shader_.use();
+    entity_shader_.setVec3 ("uSunDir",      sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     std::max(ambient_, 0.35f));
+    entity_shader_.setFloat("uSunStrength", sun_strength_ * 0.6f);
+    entity_shader_.setMat4 ("uView",        glm::value_ptr(view));
+    entity_shader_.setVec3 ("uFogColor",    sky_horizon_[0], sky_horizon_[1], sky_horizon_[2]);
+    entity_shader_.setFloat("uFogStart",    9999.0f);
+    entity_shader_.setFloat("uFogEnd",      10000.0f);
+
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glBindVertexArray(entity_vao_);
+
+    drawStevePart(proj * m, m, kSkin);
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}

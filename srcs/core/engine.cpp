@@ -201,6 +201,7 @@ struct Engine::Impl {
     bool          player_dead       = false;
     float         attack_sync_timer = 0.0f;
     float         death_sync_timer  = 0.0f;
+    float         local_walk_phase  = 0.0f;
 
     ~Impl() { delete chunk_mgr; }
 };
@@ -423,6 +424,14 @@ void Engine::run() {
         } else {
             impl_->player.input().setCaptureOnClick(true);
             impl_->player.update(dt, isSolid, isWater);
+
+            // 歩行ボブ位相: WASD 入力中のみ加算
+            if (!impl_->player_dead) {
+                InputHandler& inp = impl_->player.input();
+                bool moving = inp.isHeld(GLFW_KEY_W) || inp.isHeld(GLFW_KEY_S)
+                           || inp.isHeld(GLFW_KEY_A) || inp.isHeld(GLFW_KEY_D);
+                if (moving) impl_->local_walk_phase += dt * 8.0f;
+            }
         }
         if (impl_->player.shouldClose()) break;
 
@@ -779,6 +788,12 @@ void Engine::run() {
         // 水中にいるなら青いオーバーレイ（フィルター）を全画面に重ねる
         if (impl_->player.isInWater())
             impl_->renderer.drawUnderwaterOverlay();
+
+        // 一人称ハンドアニメーション（死亡時は非表示）
+        if (!impl_->player_dead)
+            impl_->renderer.drawFirstPersonHand(
+                impl_->local_walk_phase,
+                impl_->attack_sync_timer / 0.28f);
 
         // HUD（クロスヘア＋FPS＋座標表示）を最前面に描画
         impl_->renderer.drawHud(fps_display,

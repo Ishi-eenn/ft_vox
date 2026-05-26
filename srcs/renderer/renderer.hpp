@@ -41,6 +41,7 @@ public:
     void drawDeathScreen();
     void drawHotbar(const Inventory& inv);
     void drawUnderwaterOverlay();
+    void drawFirstPersonHand(float walk_phase, float attack_timer_norm);
     bool drawTitleScreen(float dt);
     void updateMinimap(World& world, float px, float pz, float yaw_deg, float dt);
     void drawMinimap();
