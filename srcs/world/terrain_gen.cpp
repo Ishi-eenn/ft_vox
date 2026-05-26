@@ -664,7 +664,7 @@ static bool getVillageCenter(int cell_cx, int cell_cz, uint32_t seed,
 }
 
 // 村に適した場所か（砂漠・岩山・沼除外、平坦・高さチェック）
-static bool isVillageSuitable(const NoiseGen& noise, int vx, int vz) {
+static bool isVillageSuitable(const NoiseGen& noise, uint32_t seed, int vx, int vz) {
     float temp      = noise.getTemperature((float)vx, (float)vz);
     float humid     = noise.getHumidity((float)vx, (float)vz);
     float variation = noise.getVariation((float)vx, (float)vz);
@@ -675,6 +675,12 @@ static bool isVillageSuitable(const NoiseGen& noise, int vx, int vz) {
 
     int center_h = computeTerrainHeight(noise, vx, vz);
     if (center_h < SEA_LEVEL + 4 || center_h > 80) return false;
+
+    // 川チェック: center_h を近似高さとして5点確認（computeTerrainHeight の追加呼び出しを省略）
+    static const int kRiverOffsets[5][2] = {{0,0},{16,0},{-16,0},{0,16},{0,-16}};
+    for (auto& o : kRiverOffsets) {
+        if (computeRiver(seed, vx + o[0], vz + o[1], center_h).active) return false;
+    }
 
     int min_h = center_h, max_h = center_h;
     for (int dx = -8; dx <= 8; dx += 4) {
@@ -1104,7 +1110,7 @@ static void placeVillage(Chunk& chunk, const NoiseGen& noise, uint32_t seed,
         for (int gcz = min_cz; gcz <= max_cz; ++gcz) {
             int vx, vz;
             if (!getVillageCenter(gcx, gcz, seed, vx, vz)) continue;
-            if (!isVillageSuitable(noise, vx, vz))         continue;
+            if (!isVillageSuitable(noise, seed, vx, vz))   continue;
 
             int base_y = computeTerrainHeight(noise, vx, vz);
 
@@ -1450,7 +1456,7 @@ void TerrainGenerator::generate(Chunk& chunk) const {
             for (int gcz = min_cz; gcz <= max_cz && v_count < MAX_VILLAGES; ++gcz) {
                 int vx, vz;
                 if (!getVillageCenter(gcx, gcz, seed_, vx, vz)) continue;
-                if (!isVillageSuitable(noise_, vx, vz))         continue;
+                if (!isVillageSuitable(noise_, seed_, vx, vz))  continue;
                 v_wx[v_count] = vx;
                 v_wz[v_count] = vz;
                 ++v_count;
@@ -1489,6 +1495,17 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                 continue;
             }
 
+            // 村の半径内は植生をスキップ（全バイオーム共通・Spring/Autumn含む）
+            {
+                int pwx = world_x + x, pwz = world_z + z;
+                bool near_village = false;
+                for (int vi = 0; vi < v_count; ++vi) {
+                    int ddx = pwx - v_wx[vi], ddz = pwz - v_wz[vi];
+                    if (ddx*ddx + ddz*ddz <= TREE_EXCL_R * TREE_EXCL_R) { near_village = true; break; }
+                }
+                if (near_village) continue;
+            }
+
             // ── 春バイオーム: 桜の木と花 ──────────────────────────────────
             if (wSp > 0.30f) {
                 if ((chance % 100u) < 10u && canPlaceTreeAt(chunk, x, z, surface))
@@ -1511,15 +1528,6 @@ void TerrainGenerator::generate(Chunk& chunk) const {
                     placeDecorative(chunk, x, z, surface, BlockType::ShortGrass);
                 continue;
             }
-
-            // 村の半径内は植生をスキップ
-            bool near_village = false;
-            int pwx = world_x + x, pwz = world_z + z;
-            for (int vi = 0; vi < v_count; ++vi) {
-                int dx = pwx - v_wx[vi], dz = pwz - v_wz[vi];
-                if (dx*dx + dz*dz <= TREE_EXCL_R * TREE_EXCL_R) { near_village = true; break; }
-            }
-            if (near_village) continue;
 
             // ── 沼地: 沼の木（低密度）────────────────────────────────────
             if (wSw > 0.30f) {

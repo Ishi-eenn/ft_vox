@@ -104,16 +104,16 @@ void NoiseGen::setSeed(uint32_t seed) {
     auto* tn = (FastNoiseLite*)temp_noise_;
     tn->SetSeed((int)(seed ^ 0xABCD1234u));
     tn->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
-    tn->SetFrequency(0.0012f);
+    tn->SetFrequency(0.0009f);
     tn->SetFractalType(FastNoiseLite::FractalType_FBm);
     tn->SetFractalOctaves(2);
 
     // ── 湿度ノイズ ── 気温と組み合わせてバイオームを決める ──────────────────
-    // 気温と少し違う周波数（0.0014）にすることでグリッド状の境界線が出にくくなる
+    // 気温と少し違う周波数（0.0010）にすることでグリッド状の境界線が出にくくなる
     auto* hun = (FastNoiseLite*)humid_noise_;
     hun->SetSeed((int)(seed ^ 0x5678EFABu));
     hun->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
-    hun->SetFrequency(0.0014f);
+    hun->SetFrequency(0.0010f);
     hun->SetFractalType(FastNoiseLite::FractalType_FBm);
     hun->SetFractalOctaves(2);
 
@@ -121,7 +121,7 @@ void NoiseGen::setSeed(uint32_t seed) {
     auto* varN = (FastNoiseLite*)variation_noise_;
     varN->SetSeed((int)(seed ^ 0x1234ABCDu));
     varN->SetNoiseType(FastNoiseLite::NoiseType_Perlin);
-    varN->SetFrequency(0.0012f);
+    varN->SetFrequency(0.0009f);
     varN->SetFractalType(FastNoiseLite::FractalType_FBm);
     varN->SetFractalOctaves(2);
 
