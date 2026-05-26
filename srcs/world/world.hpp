@@ -17,6 +17,9 @@ public:
     void   unregisterChunk(ChunkPos pos) override;
     void   setSeed(uint32_t seed) override;
     uint32_t getSeed() const override { return seed_; }
+    const char* getBiomeNameAt(float wx, float wz) const {
+        return gen_.getBiomeNameAt(wx, wz);
+    }
 
     // Block access in world coordinates (no chunk generation side-effects)
     BlockType getWorldBlock(int wx, int wy, int wz) const;

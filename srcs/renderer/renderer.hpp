@@ -34,7 +34,7 @@ public:
     void drawHud(int fps, int px, int py, int pz, float health, float max_health);
     void drawStats(int fps, int triangles, int cubes,
                    int visible_chunks, int loaded_chunks,
-                   bool minimap_visible);
+                   bool minimap_visible, const char* biome_name);
     void drawPlayerList(uint8_t local_id,
                         const std::map<uint8_t, RemotePlayer>& players,
                         bool multiplayer);

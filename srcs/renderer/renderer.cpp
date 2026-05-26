@@ -453,6 +453,19 @@ void Renderer::appendLetter(float* verts, int& count, char letter,
             appendLine(verts, count, left, top, left, bot);
             appendLine(verts, count, left, bot, right, bot);
             break;
+        case 'G':
+            appendLine(verts, count, left, top, right, top);
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, left, bot, right, bot);
+            appendLine(verts, count, right, bot, right, mid);
+            appendLine(verts, count, right, mid, left + w * 0.55f, mid);
+            break;
+        case 'M':
+            appendLine(verts, count, left, top, left, bot);
+            appendLine(verts, count, right, top, right, bot);
+            appendLine(verts, count, left, top, (left + right) * 0.5f, mid);
+            appendLine(verts, count, (left + right) * 0.5f, mid, right, top);
+            break;
         case 'N':
             appendLine(verts, count, left, top, left, bot);
             appendLine(verts, count, right, top, right, bot);
@@ -685,7 +698,7 @@ void Renderer::drawHud(int fps, int px, int py, int pz,
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawStats(int fps, int triangles, int cubes,
                          int visible_chunks, int loaded_chunks,
-                         bool minimap_visible) {
+                         bool minimap_visible, const char* biome_name) {
     const float hw = static_cast<float>(width_)  * 0.5f;
     const float hh = static_cast<float>(height_) * 0.5f;
 
@@ -693,7 +706,7 @@ void Renderer::drawStats(int fps, int triangles, int cubes,
     const float top_px = minimap_visible ? 320.0f : 44.0f;
     const float y1 =  1.0f - top_px / hh;
     const float x1 = x0 + 260.0f / hw;
-    const float y0 = y1 - 132.0f / hh;
+    const float y0 = y1 - 156.0f / hh;
 
     auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
                         float r, float g, float b, float a) {
@@ -731,12 +744,18 @@ void Renderer::drawStats(int fps, int triangles, int cubes,
         appendNumber(verts.data(), count, value,
                      x1 - 16.0f / hw, y, lw, lh, gap);
     };
+    auto appendTextRow = [&](const char* label, const char* value, int row) {
+        float y = y1 - (24.0f + 24.0f * static_cast<float>(row)) / hh;
+        appendWord(label, x0 + 14.0f / hw, y);
+        appendWord(value ? value : "UNKNOWN", x0 + 88.0f / hw, y);
+    };
 
     appendRow("FPS", fps, 0);
     appendRow("TRI", triangles, 1);
     appendRow("CUB", cubes, 2);
     appendRow("CHK", visible_chunks, 3);
     appendRow("LOAD", loaded_chunks, 4);
+    appendTextRow("BIOME", biome_name, 5);
 
     glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
     glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());

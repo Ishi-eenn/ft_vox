@@ -41,6 +41,21 @@ void TerrainGenerator::setSeed(uint32_t seed) {
     noise_.setSeed(seed);
 }
 
+const char* TerrainGenerator::biomeName(BiomeType biome) {
+    switch (biome) {
+        case BiomeType::Plains:   return "PLAINS";
+        case BiomeType::Desert:   return "DESERT";
+        case BiomeType::Tundra:   return "TUNDRA";
+        case BiomeType::Rocky:    return "ROCKY";
+        case BiomeType::Swamp:    return "SWAMP";
+        case BiomeType::Mountain: return "MOUNTAIN";
+        case BiomeType::Canyon:   return "CANYON";
+        case BiomeType::Spring:   return "SPRING";
+        case BiomeType::Autumn:   return "AUTUMN";
+    }
+    return "UNKNOWN";
+}
+
 // ─── バイオームパラメーター ───────────────────────────────────────────────────
 // base:   地形の基準高さ（ブロック数）
 // amp:    ノイズを何倍に増幅するか（大きいほど山が高くなる）
@@ -123,6 +138,36 @@ static void biomeWeights(float temp, float humid, float variation,
     addW(ti+1, hi,   tf          * (1.0f - hf));
     addW(ti,   hi+1, (1.0f - tf) * hf         );
     addW(ti+1, hi+1, tf          * hf         );
+}
+
+TerrainGenerator::BiomeType TerrainGenerator::getBiomeAt(float wx, float wz) const {
+    float temp      = noise_.getTemperature(wx, wz);
+    float humid     = noise_.getHumidity(wx, wz);
+    float variation = noise_.getVariation(wx, wz);
+    float wP, wD, wT, wR, wSw, wM, wC, wSp, wAu;
+    biomeWeights(temp, humid, variation, wP, wD, wT, wR, wSw, wM, wC, wSp, wAu);
+
+    BiomeType best = BiomeType::Plains;
+    float best_w = wP;
+    auto choose = [&](BiomeType biome, float w) {
+        if (w > best_w) {
+            best = biome;
+            best_w = w;
+        }
+    };
+    choose(BiomeType::Desert,   wD);
+    choose(BiomeType::Tundra,   wT);
+    choose(BiomeType::Rocky,    wR);
+    choose(BiomeType::Swamp,    wSw);
+    choose(BiomeType::Mountain, wM);
+    choose(BiomeType::Canyon,   wC);
+    choose(BiomeType::Spring,   wSp);
+    choose(BiomeType::Autumn,   wAu);
+    return best;
+}
+
+const char* TerrainGenerator::getBiomeNameAt(float wx, float wz) const {
+    return biomeName(getBiomeAt(wx, wz));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

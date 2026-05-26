@@ -804,13 +804,15 @@ void Engine::run() {
                                 impl_->player_max_health);
 
         if (impl_->show_stats_) {
+            const char* biome_name = impl_->world.getBiomeNameAt(ppos.x, ppos.z);
             impl_->renderer.drawStats(
                 fps_display,
                 visible_triangles,
                 visible_cubes,
                 static_cast<int>(visible.size()),
                 static_cast<int>(impl_->chunk_mgr->loadedCount()),
-                impl_->show_minimap_);
+                impl_->show_minimap_,
+                biome_name);
         }
 
         if (impl_->show_player_list_) {
