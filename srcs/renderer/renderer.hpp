@@ -50,6 +50,7 @@ public:
     void endFrame() override;
     void onResize(int w, int h) override;
     void setTimeOfDay(float t);
+    void setUnderwater(bool underwater) { underwater_ = underwater; }
 
     // Shadow mapping
     void updateShadowMatrix(float px, float py, float pz);
@@ -141,4 +142,5 @@ private:
     float sky_horizon_[3]  = {0.55f, 0.72f, 0.90f};
     float sky_ground_[3]   = {0.35f, 0.30f, 0.25f};
     float sun_color_[3]    = {1.00f, 0.98f, 0.85f};
+    bool  underwater_      = false;
 };

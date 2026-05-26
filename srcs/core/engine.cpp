@@ -615,6 +615,7 @@ void Engine::run() {
         float aspect = (height_ > 0) ? (float)width_ / (float)height_ : 1.0f;
         impl_->player.camera().getViewMatrix(view4x4);
         impl_->player.camera().getProjMatrix(proj4x4, aspect);
+        impl_->renderer.setUnderwater(impl_->player.isInWater());
 
         // 空（スカイボックス）用のView行列は「回転だけ」を残す。
         // 平行移動成分（どこにいるか）を取り除くことで、

@@ -1132,7 +1132,14 @@ static void setChunkLightingUniforms(Shader& shader,
     shader.setFloat("uSunStrength", sun_strength);
 }
 
-static void setChunkFogUniforms(Shader& shader, const float sky_horizon[3]) {
+static void setFogUniforms(Shader& shader, const float sky_horizon[3],
+                           bool underwater) {
+    if (underwater) {
+        shader.setVec3 ("uFogColor",  0.03f, 0.24f, 0.34f);
+        shader.setFloat("uFogStart",  7.0f);
+        shader.setFloat("uFogEnd",    38.0f);
+        return;
+    }
     shader.setVec3 ("uFogColor",  sky_horizon[0], sky_horizon[1], sky_horizon[2]);
     shader.setFloat("uFogStart",  170.0f);
     shader.setFloat("uFogEnd",    310.0f);
@@ -1161,7 +1168,7 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
     chunk_shader_.setMat4("uView",         view4x4);
     chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
-    setChunkFogUniforms(chunk_shader_, sky_horizon_);
+    setFogUniforms(chunk_shader_, sky_horizon_, underwater_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
 
     atlas_.bind(0);
@@ -1214,7 +1221,7 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
     chunk_shader_.setMat4("uView",         view4x4);
     chunk_shader_.setMat4("uLightSpaceMat", light_space_mat_);
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
-    setChunkFogUniforms(chunk_shader_, sky_horizon_);
+    setFogUniforms(chunk_shader_, sky_horizon_, underwater_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
 
     atlas_.bind(0);
@@ -1803,6 +1810,8 @@ void Renderer::drawRemotePlayers(const std::map<uint8_t, RemotePlayer>& players,
                             sun_dir_[0], sun_dir_[1], sun_dir_[2]);
     entity_shader_.setFloat("uAmbient",     ambient_);
     entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
 
     glBindVertexArray(entity_vao_);
     glDisable(GL_CULL_FACE);
@@ -1911,6 +1920,8 @@ void Renderer::drawMobs(const std::vector<Zombie>& zombies,
                             sun_dir_[0], sun_dir_[1], sun_dir_[2]);
     entity_shader_.setFloat("uAmbient",     ambient_);
     entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
 
     glBindVertexArray(entity_vao_);
     glDisable(GL_CULL_FACE);
