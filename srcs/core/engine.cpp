@@ -216,6 +216,16 @@ bool Engine::connectToServer(const char* host, uint16_t port) {
     for (int i = 0; i < 50 && !impl_->net_client.isConnected(); ++i) {
         std::vector<NetworkEvent> ev;
         impl_->net_client.poll(ev);
+        for (auto& e : ev) {
+            if (e.kind == NetworkEvent::Kind::BlockChange) {
+                auto bt = static_cast<BlockType>(e.block_type);
+                impl_->world.recordWorldBlockMod(e.bx, e.by, e.bz, bt);
+                if (impl_->chunk_mgr)
+                    rebuildModified(e.bx, e.bz, *impl_->chunk_mgr);
+            } else if (e.kind == NetworkEvent::Kind::TimeSync) {
+                impl_->time_of_day = e.time_of_day;
+            }
+        }
         // short busy-wait; acceptable once at startup
         using namespace std::chrono_literals;
         std::this_thread::sleep_for(10ms);
@@ -530,7 +540,7 @@ void Engine::run() {
             for (auto& ev : events) {
                 if (ev.kind == NetworkEvent::Kind::BlockChange) {
                     auto bt = static_cast<BlockType>(ev.block_type);
-                    impl_->world.setWorldBlock(ev.bx, ev.by, ev.bz, bt);
+                    impl_->world.recordWorldBlockMod(ev.bx, ev.by, ev.bz, bt);
                     rebuildModified(ev.bx, ev.bz, *impl_->chunk_mgr);
                 } else if (ev.kind == NetworkEvent::Kind::TimeSync) {
                     // サーバーの時刻に合わせる（小さなジャンプは許容）

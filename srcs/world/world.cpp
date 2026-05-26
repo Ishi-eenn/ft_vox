@@ -153,6 +153,15 @@ void World::applyMods(Chunk* chunk) const {
     }
 }
 
+void World::recordMod(ChunkPos pos, int lx, int ly, int lz, BlockType type) {
+    if (ly < 0 || ly >= CHUNK_SIZE_Y) return;
+    if (lx < 0 || lx >= CHUNK_SIZE_X || lz < 0 || lz >= CHUNK_SIZE_Z) return;
+
+    uint16_t key = (uint16_t)(lx * CHUNK_SIZE_Z * CHUNK_SIZE_Y + lz * CHUNK_SIZE_Y + ly);
+    mods_[pos][key] = type;
+    saveMods(pos);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ユーティリティ関数
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,14 +289,7 @@ bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
         ChunkPos pos = worldToChunk(wx, wz);
         int lx = wx - pos.x * CHUNK_SIZE_X;
         int lz = wz - pos.z * CHUNK_SIZE_Z;
-        uint16_t key = (uint16_t)(lx * CHUNK_SIZE_Z * CHUNK_SIZE_Y + lz * CHUNK_SIZE_Y + wy);
-        if (type == BlockType::Air) {
-            // Air は「元に戻した」か「実際に Air に変えた」か区別できないので記録する
-            mods_[pos][key] = BlockType::Air;
-        } else {
-            mods_[pos][key] = type;
-        }
-        saveMods(pos);
+        recordMod(pos, lx, wy, lz, type);
     }
 
     flowing_water_.erase({wx, wy, wz});
@@ -303,6 +305,38 @@ bool World::setWorldBlock(int wx, int wy, int wz, BlockType type) {
         activateWaterNeighborhood(wx, wy, wz);
     } else {
         // 固体ブロックを置いた/壊した → 隣接する水ブロックが再流動する可能性
+        static const int OFFSETS[][3] = {
+            { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1}, { 0, 1, 0}
+        };
+        for (const auto& o : OFFSETS) {
+            if (isWaterBlock(wx + o[0], wy + o[1], wz + o[2])) {
+                activateWaterNeighborhood(wx + o[0], wy + o[1], wz + o[2]);
+            }
+        }
+    }
+    return true;
+}
+
+bool World::recordWorldBlockMod(int wx, int wy, int wz, BlockType type) {
+    if (wy < 0 || wy >= CHUNK_SIZE_Y) return false;
+
+    ChunkPos pos = worldToChunk(wx, wz);
+    int lx = wx - pos.x * CHUNK_SIZE_X;
+    int lz = wz - pos.z * CHUNK_SIZE_Z;
+    recordMod(pos, lx, wy, lz, type);
+
+    BlockType old = getWorldBlock(wx, wy, wz);
+    bool applied = setExistingWorldBlock(wx, wy, wz, type);
+    if (!applied) return true;
+
+    flowing_water_.erase({wx, wy, wz});
+    if (type == BlockType::Water || old == BlockType::Water) {
+        auto it = chunks_.find(pos);
+        if (it != chunks_.end()) {
+            it->second->setWaterLevel(lx, wy, lz, type == BlockType::Water ? 8 : 0);
+        }
+        activateWaterNeighborhood(wx, wy, wz);
+    } else {
         static const int OFFSETS[][3] = {
             { 1, 0, 0}, {-1, 0, 0}, { 0, 0, 1}, { 0, 0,-1}, { 0, 1, 0}
         };

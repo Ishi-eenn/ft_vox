@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <sys/stat.h>
 
 static volatile bool g_running = true;
 
@@ -14,10 +15,66 @@ static void handle_sigint(int) { g_running = false; }
 
 bool VoxServer::init(uint16_t port, uint32_t seed) {
     seed_ = seed;
+    mkdir("saves", 0755);
+    char path[256];
+    snprintf(path, sizeof(path), "saves/server_%u_blocks.bin", seed_);
+    block_mod_path_ = path;
+    loadBlockMods();
     if (!listen_sock_.listen(port)) return false;
     signal(SIGINT, handle_sigint);
-    fprintf(stderr, "[Server] seed=%u  waiting for players...\n", seed_);
+    fprintf(stderr, "[Server] seed=%u  mods=%zu  waiting for players...\n",
+            seed_, block_mods_.size());
     return true;
+}
+
+void VoxServer::loadBlockMods() {
+    block_mods_.clear();
+    FILE* f = fopen(block_mod_path_.c_str(), "rb");
+    if (!f) return;
+
+    char magic[4];
+    uint8_t version;
+    uint32_t count;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "VSRM", 4) != 0 ||
+        fread(&version, 1, 1, f) != 1 || version != 1 ||
+        fread(&count, sizeof(count), 1, f) != 1) {
+        fclose(f);
+        return;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        PktBlockChange pkt;
+        if (fread(&pkt, sizeof(pkt), 1, f) != 1) break;
+        block_mods_[{pkt.x, pkt.y, pkt.z}] = pkt.block_type;
+    }
+    fclose(f);
+}
+
+void VoxServer::saveBlockMods() const {
+    if (block_mod_path_.empty()) return;
+    FILE* f = fopen(block_mod_path_.c_str(), "wb");
+    if (!f) return;
+
+    const char magic[4] = {'V','S','R','M'};
+    const uint8_t version = 1;
+    const uint32_t count = (uint32_t)block_mods_.size();
+    fwrite(magic, 1, 4, f);
+    fwrite(&version, 1, 1, f);
+    fwrite(&count, sizeof(count), 1, f);
+    for (const auto& [key, type] : block_mods_) {
+        PktBlockChange pkt{key.x, key.y, key.z, type};
+        fwrite(&pkt, sizeof(pkt), 1, f);
+    }
+    fclose(f);
+}
+
+void VoxServer::sendBlockModsTo(Client& client) {
+    for (const auto& [key, type] : block_mods_) {
+        PktBlockChange pkt{key.x, key.y, key.z, type};
+        PacketHeader hdr{PacketType::BlockChange, sizeof(pkt)};
+        client.sock.sendRaw(&hdr, sizeof(hdr));
+        client.sock.sendRaw(&pkt, sizeof(pkt));
+    }
 }
 
 void VoxServer::run() {
@@ -127,6 +184,8 @@ void VoxServer::handlePacket(int from_fd, PacketType type,
             from.sock.sendRaw(&h2, sizeof(h2));
             from.sock.sendRaw(&pp, sizeof(pp));
         }
+
+        sendBlockModsTo(from);
         break;
     }
     case PacketType::PlayerPos: {
@@ -144,6 +203,8 @@ void VoxServer::handlePacket(int from_fd, PacketType type,
         if (size < sizeof(PktBlockChange)) break;
         PktBlockChange pkt;
         std::memcpy(&pkt, payload, sizeof(pkt));
+        block_mods_[{pkt.x, pkt.y, pkt.z}] = pkt.block_type;
+        saveBlockMods();
         // 送信者を除いてブロードキャスト（送信者は既にローカルで適用済み）
         broadcast(PacketType::BlockChange, &pkt, sizeof(pkt), from_fd);
         break;

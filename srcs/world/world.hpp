@@ -21,6 +21,7 @@ public:
     // Block access in world coordinates (no chunk generation side-effects)
     BlockType getWorldBlock(int wx, int wy, int wz) const;
     bool      setWorldBlock(int wx, int wy, int wz, BlockType type);
+    bool      recordWorldBlockMod(int wx, int wy, int wz, BlockType type);
     std::vector<WorldPos> stepWater(ChunkPos min_chunk, ChunkPos max_chunk) override;
 
     // Persistence
@@ -44,6 +45,7 @@ private:
     void activateWaterAt(int wx, int wy, int wz);
     void activateWaterNeighborhood(int wx, int wy, int wz);
 
+    void recordMod(ChunkPos pos, int lx, int ly, int lz, BlockType type);
     void saveMods(ChunkPos pos) const;
     void loadSaveDir();
     static std::string chunkSavePath(const std::string& dir, ChunkPos pos);
