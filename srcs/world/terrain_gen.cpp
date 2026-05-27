@@ -613,10 +613,8 @@ static void placeAutumnTree(Chunk& chunk, int x, int z, int surface, uint32_t se
     for (int y = surface + 1; y <= trunk_top; ++y)
         chunk.setBlock(x, y, z, BlockType::Wood);
 
-    // 葉色：per-leaf hash で OrangeLeaves (70%) / Leaves (30%) を混ぜる
-    auto autumnLeaf = [&](int ldx, int lcy, int ldz) -> BlockType {
-        uint32_t lh = hash3(wx + ldx, lcy, wz + ldz) ^ seed;
-        return (lh % 10u < 7u) ? BlockType::OrangeLeaves : BlockType::Leaves;
+    auto autumnLeaf = [](int, int, int) -> BlockType {
+        return BlockType::OrangeLeaves;
     };
 
     auto placeAutumnLeaf = [&](int ldx, int lcy, int ldz) {
