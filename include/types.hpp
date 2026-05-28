@@ -23,8 +23,15 @@ enum class BlockType : uint8_t {
     Mushroom = 15,
     PinkLeaves   = 16,  // 桜（春バイオーム）
     OrangeLeaves = 17,  // 紅葉オレンジ（秋バイオーム）
+    Bow          = 18,  // 弓（アイテム: 設置不可・スタック上限1）
     COUNT
 };
+
+// ブロックではなく "アイテム" として扱う BlockType を判定する。
+// アイテムは右クリックで設置されず、種別固有の挙動を発火する。
+inline bool isItem(BlockType t) {
+    return t == BlockType::Bow;
+}
 
 enum class Face : uint8_t {
     Top    = 0,

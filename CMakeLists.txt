@@ -85,6 +85,7 @@ add_executable(
   srcs/network/server.cpp
   srcs/network/client.cpp
   srcs/mob/mob_manager.cpp
+  srcs/mob/arrow_manager.cpp
 )
 
 target_include_directories(

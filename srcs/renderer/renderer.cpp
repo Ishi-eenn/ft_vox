@@ -2268,6 +2268,80 @@ void Renderer::drawMobs(const std::vector<Zombie>& zombies,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// drawArrows() — 飛行中の矢を細長い直方体で描画する
+//
+// 速度ベクトル v から yaw / pitch を算出し、矢の長軸が進行方向と一致するよう
+// 回転を掛ける。刺さって停止中の矢は最後の速度方向を保持して描画する。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawArrows(const std::vector<Arrow>& arrows,
+                           const float* view4x4, const float* proj4x4) {
+    if (arrows.empty() || !entity_vao_) return;
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir", sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    // 茶色のシャフトと灰色の矢じりで構成
+    static const float kShaft[]    = {0.55f, 0.36f, 0.18f};
+    static const float kFletching[] = {0.85f, 0.85f, 0.85f};
+
+    for (const Arrow& a : arrows) {
+        if (!a.alive) continue;
+
+        // 進行方向から yaw / pitch を算出（ベクトルが極端に小さい場合は前方扱い）
+        float vx = a.vx, vy = a.vy, vz = a.vz;
+        float len2 = vx*vx + vy*vy + vz*vz;
+        if (len2 < 1e-6f) { vx = 1.0f; vy = 0.0f; vz = 0.0f; }
+
+        const float horiz = std::sqrt(vx*vx + vz*vz);
+        const float yaw   = std::atan2(vz, vx);    // ラジアン
+        const float pitch = std::atan2(vy, horiz);
+
+        // ピボット = 矢の先端。中心軸を +X 方向にしておき、yaw / pitch で回す。
+        glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(a.x, a.y, a.z));
+        m = glm::rotate(m, yaw,   glm::vec3(0.f, -1.f, 0.f));
+        m = glm::rotate(m, pitch, glm::vec3(0.f, 0.f, 1.f));
+
+        // シャフト本体（長さ 0.6、太さ 0.05）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.30f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.6f, 0.05f, 0.05f));
+            drawStevePart(vp * mm, mm, kShaft);
+        }
+        // 矢じり（先端、長さ 0.10）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(0.05f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.10f, 0.08f, 0.08f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+        // 矢羽（末端、十字に配置）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.58f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.12f, 0.02f, 0.18f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.58f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.12f, 0.18f, 0.02f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // drawFirstPersonHand() — ローカルプレイヤーの一人称ハンドアニメーション
 //
 // 画面右下に腕を表示する。歩行時にボブ、攻撃時にスイングアニメーション。

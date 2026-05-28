@@ -566,6 +566,43 @@ static void fillMushroomPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_
     }
 }
 
+// 弓アイコン: 茶色の弦と弓本体を 16×16 タイルに描く
+static void fillBow(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int dx = px - 7;
+            int dy = py - 7;
+            int r2 = dx * dx + dy * dy;
+            // 弓本体（円弧の左半分）
+            bool bow_arc = (r2 >= 36 && r2 <= 49) && (px <= 8);
+            // 弦（右側の縦線）
+            bool string  = (px == 10 && py >= 3 && py <= 13);
+            // グリップ
+            bool grip    = (px >= 7 && px <= 8 && py >= 6 && py <= 9);
+            // 矢じり（中央の矢）
+            bool shaft   = (py == 7 && px >= 4 && px <= 12);
+            bool tip     = (px == 13 && py >= 6 && py <= 8) ||
+                           (px == 12 && (py == 6 || py == 8));
+            if (bow_arc || grip) {
+                int n = hash2(px, py, 2207);
+                setPixel(buf, atlas_w, ox, oy, px, py,
+                         110 + (n % 28), 68 + (n % 22), 32 + (n % 18));
+            } else if (string) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 230, 220, 200);
+            } else if (tip) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 200, 200, 210);
+            } else if (shaft) {
+                setPixel(buf, atlas_w, ox, oy, px, py, 180, 130, 80);
+            } else {
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -603,6 +640,7 @@ bool TextureAtlas::generate() {
     // row=2: 春バイオーム・秋バイオーム用の色付き葉
     fillColoredLeaves(pixels, atlas_w, 0, 2, 210, 140, 160, 20, 12, 14, 511, 719); // PinkLeaves   tile=16 (桜ピンク)
     fillColoredLeaves(pixels, atlas_w, 1, 2, 195, 105,  30, 22, 18, 10, 613, 821); // OrangeLeaves tile=17 (紅葉オレンジ)
+    fillBow      (pixels, atlas_w, 2, 2);            // Bow        tile=18
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);
