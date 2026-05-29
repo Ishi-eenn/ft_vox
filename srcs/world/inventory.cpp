@@ -3,6 +3,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 #include "inventory.hpp"
 
+static int stackLimit(BlockType type) {
+    return type == BlockType::Bow ? 1 : STACK_MAX;
+}
+
 void inventoryAdd(Inventory& inv, BlockType type, int n) {
     if (n <= 0) return;
     if (type == BlockType::Air || type == BlockType::Water ||
@@ -10,10 +14,12 @@ void inventoryAdd(Inventory& inv, BlockType type, int n) {
         type == BlockType::Mushroom)
         return;
 
+    const int limit = stackLimit(type);
+
     // 既存スタックに積む
     for (int i = 0; i < HOTBAR_SIZE && n > 0; ++i) {
-        if (inv.slots[i].type == type && inv.slots[i].count < STACK_MAX) {
-            int add = STACK_MAX - inv.slots[i].count;
+        if (inv.slots[i].type == type && inv.slots[i].count < limit) {
+            int add = limit - inv.slots[i].count;
             if (add > n) add = n;
             inv.slots[i].count += add;
             n -= add;
@@ -22,13 +28,12 @@ void inventoryAdd(Inventory& inv, BlockType type, int n) {
     // 空きスロットを埋める
     for (int i = 0; i < HOTBAR_SIZE && n > 0; ++i) {
         if (inv.slots[i].type == BlockType::Air) {
-            int add = n > STACK_MAX ? STACK_MAX : n;
+            int add = n > limit ? limit : n;
             inv.slots[i] = {type, add};
             n -= add;
         }
     }
-    // インベントリ満杯: 残りは捨てる (Bow 等の上限1は STACK_MAX 側で表現される想定だが
-    // 現状 STACK_MAX=64 のため Bow も技術上は 64 まで積める。仕様上は気にしない)
+    // インベントリ満杯: 残りは捨てる
 }
 
 bool inventoryConsumeSelected(Inventory& inv) {

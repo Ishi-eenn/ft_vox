@@ -15,6 +15,7 @@
 #include "renderer/renderer.hpp"
 #include "types.hpp"
 #include "world/world.hpp"
+#include "world/recipe.hpp"
 #include "network/client.hpp"
 #include "mob/zombie.hpp"
 
@@ -1023,8 +1024,7 @@ void Renderer::drawHotbar(const Inventory& inv) {
         for (int i = 0; i < HOTBAR_SIZE; ++i) {
             const ItemStack& s = inv.slots[i];
             if (s.type == BlockType::Air || s.count <= 0) continue;
-            if (s.type == BlockType::Bow) continue;
-            if (s.type == BlockType::Torch) continue;
+            if (isItem(s.type) || s.type == BlockType::Torch) continue;
 
             AtlasUV uv = atlas_.getUV(s.type);
             float uc = (uv.u0 + uv.u1) * 0.5f;
@@ -1086,7 +1086,7 @@ void Renderer::drawHotbar(const Inventory& inv) {
         }
     }
 
-    // 弓・松明は立方体としてではなく 2D アイコンとして表示する。
+    // アイテムと松明は立方体としてではなく 2D アイコンとして表示する。
     {
         hotbar_shader_.setFloat("uBright", 1.0f);
         float verts[HOTBAR_SIZE * 6 * 4] = {};
@@ -1094,8 +1094,8 @@ void Renderer::drawHotbar(const Inventory& inv) {
 
         for (int i = 0; i < HOTBAR_SIZE; ++i) {
             const ItemStack& s = inv.slots[i];
-            if ((s.type != BlockType::Bow && s.type != BlockType::Torch)
-                || s.count <= 0) continue;
+            if (!(isItem(s.type) || s.type == BlockType::Torch) ||
+                s.count <= 0) continue;
 
             AtlasUV uv = atlas_.getUV(s.type);
             const float cx = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX * 0.5f);
@@ -1146,9 +1146,9 @@ void Renderer::drawHotbar(const Inventory& inv) {
         appendLine(verts.data(), cnt, x0, sy0, x0, sy1);
         appendLine(verts.data(), cnt, x1, sy0, x1, sy1);
 
-        // 個数（2個以上のとき右下に表示）。Torch は無限供給なので個数は隠す。
+        // 個数（2個以上のとき右下に表示）。
         const ItemStack& s = inv.slots[i];
-        if (s.type != BlockType::Air && s.type != BlockType::Torch && s.count > 1) {
+        if (s.type != BlockType::Air && s.count > 1) {
             float dw = 8.0f / hw, dh = 11.0f / hh, dg = 2.0f / hw;
             appendNumber(verts.data(), cnt, s.count,
                          x1 - 3.0f / hw, sy0 + dh + 3.0f / hh, dw, dh, dg);
@@ -1177,6 +1177,211 @@ void Renderer::drawHotbar(const Inventory& inv) {
     }
     glBindVertexArray(0);
 
+    glEnable(GL_DEPTH_TEST);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawCraftMenu() — クラフトレシピ一覧をHUDに重ねて描画する
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawCraftMenu(const Inventory& inv,
+                             const std::vector<Recipe>& recipes,
+                             int selected_recipe) {
+    if (recipes.empty()) return;
+
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+
+    auto nx = [&](float px) { return px / hw - 1.0f; };
+    auto ny = [&](float py) { return py / hh - 1.0f; };
+
+    const int recipe_count = static_cast<int>(recipes.size());
+    selected_recipe %= recipe_count;
+    if (selected_recipe < 0) selected_recipe += recipe_count;
+
+    const float panel_w_px = std::min(500.0f, static_cast<float>(width_) - 40.0f);
+    const float row_h_px   = 58.0f;
+    const float panel_h_px = 76.0f + row_h_px * static_cast<float>(recipe_count);
+    const float panel_x_px = (static_cast<float>(width_)  - panel_w_px) * 0.5f;
+    const float panel_y_px = (static_cast<float>(height_) - panel_h_px) * 0.5f + 32.0f;
+    const float panel_top_px = panel_y_px + panel_h_px;
+
+    auto drawQuad = [&](float qx0, float qy0, float qx1, float qy1,
+                        float r, float g, float b, float a) {
+        float q[12] = {
+            qx0, qy0, qx1, qy0, qx1, qy1,
+            qx0, qy0, qx1, qy1, qx0, qy1
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(q), q);
+        hud_shader_.setVec4("uColor", r, g, b, a);
+        glBindVertexArray(hotbar_vao_);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+    drawQuad(nx(panel_x_px), ny(panel_y_px),
+             nx(panel_x_px + panel_w_px), ny(panel_top_px),
+             0.02f, 0.025f, 0.03f, 0.78f);
+    drawQuad(nx(panel_x_px), ny(panel_top_px - 5.0f),
+             nx(panel_x_px + panel_w_px), ny(panel_top_px),
+             0.95f, 0.70f, 0.22f, 0.92f);
+
+    for (int i = 0; i < recipe_count; ++i) {
+        const bool selected = i == selected_recipe;
+        const bool ready = canCraft(inv, recipes[i]);
+        const float row_top_px = panel_top_px - 58.0f - row_h_px * static_cast<float>(i);
+        const float row_bot_px = row_top_px - 48.0f;
+        const float x0 = nx(panel_x_px + 14.0f);
+        const float x1 = nx(panel_x_px + panel_w_px - 14.0f);
+
+        if (selected) {
+            drawQuad(x0, ny(row_bot_px), x1, ny(row_top_px),
+                     ready ? 0.16f : 0.18f,
+                     ready ? 0.20f : 0.12f,
+                     ready ? 0.15f : 0.11f,
+                     0.82f);
+            drawQuad(x0, ny(row_top_px - 3.0f), x1, ny(row_top_px),
+                     0.95f, 0.70f, 0.22f, 0.95f);
+        } else {
+            drawQuad(x0, ny(row_bot_px), x1, ny(row_top_px),
+                     ready ? 0.07f : 0.09f,
+                     ready ? 0.10f : 0.075f,
+                     ready ? 0.08f : 0.075f,
+                     0.62f);
+        }
+    }
+
+    glDisable(GL_CULL_FACE);
+    hotbar_shader_.use();
+    hotbar_shader_.setInt("uAtlas", 0);
+    hotbar_shader_.setFloat("uBright", 1.0f);
+    atlas_.bind(0);
+    glBindVertexArray(hotbar_tex_vao_);
+
+    auto drawIcon = [&](BlockType type, float cx_px, float cy_px, float size_px) {
+        if (type == BlockType::Air) return;
+        AtlasUV uv = atlas_.getUV(type);
+        const float cx = nx(cx_px);
+        const float cy = ny(cy_px);
+        const float iw = size_px / hw;
+        const float ih = size_px / hh;
+        const float x0 = cx - iw * 0.5f;
+        const float x1 = cx + iw * 0.5f;
+        const float y0 = cy - ih * 0.5f;
+        const float y1 = cy + ih * 0.5f;
+        const float verts[24] = {
+            x0, y0, uv.u0, uv.v1,
+            x1, y0, uv.u1, uv.v1,
+            x1, y1, uv.u1, uv.v0,
+            x0, y0, uv.u0, uv.v1,
+            x1, y1, uv.u1, uv.v0,
+            x0, y1, uv.u0, uv.v0,
+        };
+        glBindBuffer(GL_ARRAY_BUFFER, hotbar_tex_vbo_);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(verts), verts);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    };
+
+    for (int i = 0; i < recipe_count; ++i) {
+        const Recipe& r = recipes[i];
+        const float row_top_px = panel_top_px - 58.0f - row_h_px * static_cast<float>(i);
+        const float row_bot_px = row_top_px - 48.0f;
+        const float cy_px = (row_top_px + row_bot_px) * 0.5f;
+        drawIcon(r.output.type, panel_x_px + 38.0f, cy_px, 34.0f);
+        for (size_t j = 0; j < r.inputs.size() && j < 4; ++j)
+            drawIcon(r.inputs[j].type,
+                     panel_x_px + panel_w_px - 178.0f + 44.0f * static_cast<float>(j),
+                     cy_px, 30.0f);
+    }
+    glBindVertexArray(0);
+    glEnable(GL_CULL_FACE);
+
+    std::array<float, 2048> verts{};
+    int count = 0;
+
+    auto appendWord = [&](const char* word, float left_px, float top_px,
+                          float w_px, float h_px, float gap_px) {
+        float x = nx(left_px);
+        const float y = ny(top_px);
+        const float w = w_px / hw;
+        const float h = h_px / hh;
+        const float gap = gap_px / hw;
+        for (int i = 0; word[i] != '\0'; ++i) {
+            if (word[i] == ' ') {
+                x += w * 0.55f + gap;
+                continue;
+            }
+            appendLetter(verts.data(), count, word[i], x, y, w, h);
+            x += w + gap;
+        }
+    };
+
+    auto appendWordRight = [&](const char* word, float right_px, float top_px,
+                               float w_px, float h_px, float gap_px) {
+        int visible = 0;
+        int spaces = 0;
+        for (int i = 0; word[i] != '\0'; ++i) {
+            if (word[i] == ' ') ++spaces;
+            else ++visible;
+        }
+        const float total = static_cast<float>(visible) * w_px
+            + static_cast<float>(visible + spaces - 1) * gap_px
+            + static_cast<float>(spaces) * w_px * 0.55f;
+        appendWord(word, right_px - total, top_px, w_px, h_px, gap_px);
+    };
+
+    auto appendCount = [&](int value, float right_px, float top_px) {
+        appendNumber(verts.data(), count, value, nx(right_px), ny(top_px),
+                     7.0f / hw, 10.0f / hh, 2.0f / hw);
+    };
+
+    appendWord("CRAFT", panel_x_px + 20.0f, panel_top_px - 18.0f,
+               13.0f, 19.0f, 5.0f);
+    appendWordRight("MATS", panel_x_px + panel_w_px - 36.0f,
+                    panel_top_px - 18.0f, 10.0f, 15.0f, 4.0f);
+
+    for (int i = 0; i < recipe_count; ++i) {
+        const Recipe& r = recipes[i];
+        const bool ready = canCraft(inv, r);
+        const bool selected = i == selected_recipe;
+        const float row_top_px = panel_top_px - 58.0f - row_h_px * static_cast<float>(i);
+        const float row_bot_px = row_top_px - 48.0f;
+        const float cy_px = (row_top_px + row_bot_px) * 0.5f;
+
+        appendWord(r.name, panel_x_px + 68.0f, row_top_px - 14.0f,
+                   11.0f, 16.0f, 4.0f);
+        appendWordRight(ready ? "CAN" : "NEED",
+                        panel_x_px + panel_w_px - 18.0f,
+                        row_top_px - 16.0f, 9.0f, 13.0f, 3.0f);
+
+        if (r.output.count > 1)
+            appendCount(r.output.count, panel_x_px + 58.0f, cy_px - 8.0f);
+        for (size_t j = 0; j < r.inputs.size() && j < 4; ++j) {
+            const float x = panel_x_px + panel_w_px - 160.0f
+                + 44.0f * static_cast<float>(j);
+            appendCount(r.inputs[j].count, x, cy_px - 8.0f);
+        }
+
+        if (selected) {
+            const float x0 = nx(panel_x_px + 14.0f);
+            const float x1 = nx(panel_x_px + panel_w_px - 14.0f);
+            const float y0 = ny(row_bot_px);
+            const float y1 = ny(row_top_px);
+            appendLine(verts.data(), count, x0, y0, x1, y0);
+            appendLine(verts.data(), count, x0, y1, x1, y1);
+            appendLine(verts.data(), count, x0, y0, x0, y1);
+            appendLine(verts.data(), count, x1, y0, x1, y1);
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, count * sizeof(float), verts.data());
+    hud_shader_.use();
+    hud_shader_.setVec4("uColor", 0.95f, 0.92f, 0.80f, 0.96f);
+    glBindVertexArray(hud_vao_);
+    glDrawArrays(GL_LINES, 0, count / 2);
+    glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
 }
 

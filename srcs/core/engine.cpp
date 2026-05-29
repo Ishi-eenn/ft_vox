@@ -27,6 +27,8 @@
 #include "renderer/renderer.hpp"
 #include "renderer/frustum.hpp"
 #include "world/world.hpp"
+#include "world/inventory.hpp"
+#include "world/recipe.hpp"
 #include "player/player.hpp"
 #include "streaming/chunk_manager.hpp"
 #include "network/client.hpp"
@@ -139,41 +141,6 @@ static void rebuildModified(int wx, int wz, ChunkManager& mgr) {
     if (lz == CHUNK_SIZE_Z-1)  mgr.rebuildChunkAt({cx, cz + 1});
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// インベントリ操作ヘルパー
-// ─────────────────────────────────────────────────────────────────────────────
-
-// ブロックをインベントリに1個追加する。既存スタックに積む → 空きスロットを探す。
-static void inventoryAdd(Inventory& inv, BlockType type) {
-    if (type == BlockType::Air || type == BlockType::Water ||
-        type == BlockType::ShortGrass || isItem(type)) return;
-    // Torch はスロット 8 に無限補充されるため、拾っても追加せず捨てる
-    // （インベントリが松明で埋まるのを防ぐ）
-    if (type == BlockType::Torch) return;
-    for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        if (inv.slots[i].type == type && inv.slots[i].count < STACK_MAX) {
-            ++inv.slots[i].count;
-            return;
-        }
-    }
-    for (int i = 0; i < HOTBAR_SIZE; ++i) {
-        if (inv.slots[i].type == BlockType::Air) {
-            inv.slots[i] = {type, 1};
-            return;
-        }
-    }
-    // インベントリ満杯: 無音で捨てる
-}
-
-// 選択スロットから1個消費する。成功なら true を返す。
-static bool inventoryConsume(Inventory& inv) {
-    ItemStack& s = inv.slots[inv.selected];
-    if (s.type == BlockType::Air || s.count <= 0) return false;
-    --s.count;
-    if (s.count == 0) s = {};
-    return true;
-}
-
 static void applyMobExplosion(const MobExplosion& ex, World& world,
                               ChunkManager& chunk_mgr,
                               NetworkClient* net_client) {
@@ -237,6 +204,8 @@ struct Engine::Impl {
     bool          show_minimap_  = true;
     bool          show_player_list_ = false;
     bool          show_stats_ = false;
+    bool          craft_menu_open = false;
+    int           craft_selected  = 0;
 
     // Multiplayer
     NetworkClient net_client;
@@ -362,11 +331,6 @@ bool Engine::init(uint32_t seed, int width, int height) {
 
     // ── チャンクマネージャーの初期化 ───────────────────────────────────────────
     impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer);
-
-    // 弓を最後のホットバースロットに常備（無限矢扱い）
-    impl_->inventory.slots[HOTBAR_SIZE - 1] = {BlockType::Bow, 1};
-    // 松明をスロット 8（インデックス 7）に常備（無限供給）
-    impl_->inventory.slots[HOTBAR_SIZE - 2] = {BlockType::Torch, STACK_MAX};
 
     running_ = true;
     fprintf(stderr, "[Engine] init OK  seed=%u  %dx%d\n", seed, width_, height_);
@@ -587,110 +551,156 @@ void Engine::run() {
         {
             InputHandler& inp = impl_->player.input();
             Inventory&    inv = impl_->inventory;
+            const std::vector<Recipe>& recipes = getRecipes();
 
-            // 松明スロット（インデックス 7 = 数字キー 8）を毎フレーム補充する。
-            // 「常に入れておく」要件のため、設置で減っても次フレームで満タンに戻る。
-            if (inv.slots[HOTBAR_SIZE - 2].type != BlockType::Torch ||
-                inv.slots[HOTBAR_SIZE - 2].count < STACK_MAX) {
-                inv.slots[HOTBAR_SIZE - 2] = {BlockType::Torch, STACK_MAX};
+            // C: クラフトメニュー表示切り替え。上下キーで選択、Enter で作成。
+            static bool prev_c = false;
+            static bool prev_up = false;
+            static bool prev_down = false;
+            static bool prev_enter = false;
+            const bool cur_c = inp.isHeld(GLFW_KEY_C);
+            const bool cur_up = inp.isHeld(GLFW_KEY_UP);
+            const bool cur_down = inp.isHeld(GLFW_KEY_DOWN);
+            const bool cur_enter = inp.isHeld(GLFW_KEY_ENTER) ||
+                                   inp.isHeld(GLFW_KEY_KP_ENTER);
+
+            if (cur_c && !prev_c) {
+                impl_->craft_menu_open = !impl_->craft_menu_open;
+                if (!recipes.empty()) {
+                    impl_->craft_selected = std::clamp(
+                        impl_->craft_selected, 0,
+                        static_cast<int>(recipes.size()) - 1);
+                }
+                impl_->bow_charging = false;
+                impl_->bow_charge_time = 0.0f;
             }
 
-            // キー 1〜9: ホットバースロットを選択（ワンショット: 前フレームと差分）
-            static bool prev_num[9] = {};
-            for (int k = 0; k < 9; ++k) {
-                bool cur = inp.isHeld(GLFW_KEY_1 + k);
-                if (cur && !prev_num[k]) inv.selected = k;
-                prev_num[k] = cur;
-            }
-
-            // スクロールホイールでスロットを循環
-            float sw = inp.scrollY();
-            if (sw < -0.5f)
-                inv.selected = (inv.selected + 1) % HOTBAR_SIZE;
-            else if (sw > 0.5f)
-                inv.selected = (inv.selected + HOTBAR_SIZE - 1) % HOTBAR_SIZE;
-
-            // カーソルがキャプチャされているときだけブロック操作を受け付ける
-            if (inp.isCursorCaptured()) {
-                glm::vec3 pos   = impl_->player.camera().position();
-                glm::vec3 front = impl_->player.camera().front();
-                RayHit hit = castRay(pos, front, 6.0f, impl_->world);
-                BlockType held = inv.slots[inv.selected].type;
-                const bool bow_equipped = (held == BlockType::Bow);
-
-                // 左クリック: ブロックを壊してインベントリに追加 OR ゾンビを攻撃
-                if (inp.wasLeftClicked()) {
-                    impl_->attack_sync_timer = 0.28f;
-                    if (hit.hit) {
-                        BlockType broken = impl_->world.getWorldBlock(
-                            hit.bx, hit.by, hit.bz);
-                        impl_->world.setWorldBlock(hit.bx, hit.by, hit.bz,
-                                                   BlockType::Air);
-                        rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
-                        inventoryAdd(inv, broken);
-                        if (impl_->multiplayer)
-                            impl_->net_client.sendBlockChange(
-                                hit.bx, hit.by, hit.bz,
-                                static_cast<uint8_t>(BlockType::Air));
-                    } else {
-                        impl_->mob_mgr.playerMeleeAttack(
-                            pos.x, pos.y, pos.z, front.x, front.z);
+            if (impl_->craft_menu_open) {
+                if (recipes.empty()) {
+                    impl_->craft_menu_open = false;
+                } else {
+                    const int recipe_count = static_cast<int>(recipes.size());
+                    if (cur_up && !prev_up)
+                        impl_->craft_selected =
+                            (impl_->craft_selected + recipe_count - 1) % recipe_count;
+                    if (cur_down && !prev_down)
+                        impl_->craft_selected =
+                            (impl_->craft_selected + 1) % recipe_count;
+                    if (cur_enter && !prev_enter) {
+                        const Recipe& r = recipes[impl_->craft_selected];
+                        if (applyCraft(inv, r))
+                            fprintf(stderr, "[Craft] crafted %s\n", r.name);
+                        else
+                            fprintf(stderr, "[Craft] cannot craft %s\n", r.name);
                     }
                 }
+                impl_->bow_charging = false;
+                impl_->bow_charge_time = 0.0f;
+            }
 
-                // 弓装備中: 右クリック長押しでチャージ、離して発射。
-                // それ以外: 右クリックでブロックを設置。
-                const bool rmb_held =
-                    glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+            prev_c = cur_c;
+            prev_up = cur_up;
+            prev_down = cur_down;
+            prev_enter = cur_enter;
 
-                if (bow_equipped) {
-                    if (rmb_held) {
-                        impl_->bow_charging    = true;
-                        impl_->bow_charge_time += dt;
-                        if (impl_->bow_charge_time > 1.5f)
-                            impl_->bow_charge_time = 1.5f;
-                    } else if (impl_->bow_charging) {
-                        // 離した瞬間: 矢を発射
-                        // チャージ 0.1秒以下なら最低威力、1.0秒以上で最大威力
-                        float t = (impl_->bow_charge_time - 0.1f) / 0.9f;
-                        if (t < 0.0f) t = 0.0f;
-                        if (t > 1.0f) t = 1.0f;
-                        const float speed = 8.0f + 28.0f * t;
-                        // 矢の発射位置: カメラ少し前方・少し下
-                        const glm::vec3 spawn = pos + front * 0.4f
-                                                    - glm::vec3(0.0f, 0.15f, 0.0f);
-                        impl_->arrow_mgr.spawn(spawn.x, spawn.y, spawn.z,
-                                               front.x * speed,
-                                               front.y * speed,
-                                               front.z * speed);
-                        impl_->attack_sync_timer = 0.20f;
-                        impl_->bow_charging    = false;
-                        impl_->bow_charge_time = 0.0f;
-                    }
-                } else {
-                    // 弓を持っていないときはチャージ状態をリセット
-                    impl_->bow_charging    = false;
-                    impl_->bow_charge_time = 0.0f;
+            if (!impl_->craft_menu_open) {
+                // キー 1〜9: ホットバースロットを選択（ワンショット: 前フレームと差分）
+                static bool prev_num[9] = {};
+                for (int k = 0; k < 9; ++k) {
+                    bool cur = inp.isHeld(GLFW_KEY_1 + k);
+                    if (cur && !prev_num[k]) inv.selected = k;
+                    prev_num[k] = cur;
+                }
 
-                    // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
-                    if (hit.hit && inp.wasRightClicked()) {
-                        BlockType to_place = held;
-                        if (to_place != BlockType::Air && !isItem(to_place) &&
-                            inventoryConsume(inv)) {
-                            impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
-                                                       to_place);
-                            rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                // スクロールホイールでスロットを循環
+                float sw = inp.scrollY();
+                if (sw < -0.5f)
+                    inv.selected = (inv.selected + 1) % HOTBAR_SIZE;
+                else if (sw > 0.5f)
+                    inv.selected = (inv.selected + HOTBAR_SIZE - 1) % HOTBAR_SIZE;
+
+                // カーソルがキャプチャされているときだけブロック操作を受け付ける
+                if (inp.isCursorCaptured()) {
+                    glm::vec3 pos   = impl_->player.camera().position();
+                    glm::vec3 front = impl_->player.camera().front();
+                    RayHit hit = castRay(pos, front, 6.0f, impl_->world);
+                    BlockType held = inv.slots[inv.selected].type;
+                    const bool bow_equipped = (held == BlockType::Bow);
+
+                    // 左クリック: ブロックを壊してインベントリに追加 OR ゾンビを攻撃
+                    if (inp.wasLeftClicked()) {
+                        impl_->attack_sync_timer = 0.28f;
+                        if (hit.hit) {
+                            BlockType broken = impl_->world.getWorldBlock(
+                                hit.bx, hit.by, hit.bz);
+                            impl_->world.setWorldBlock(hit.bx, hit.by, hit.bz,
+                                                       BlockType::Air);
+                            rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
+                            inventoryAdd(inv, broken);
                             if (impl_->multiplayer)
                                 impl_->net_client.sendBlockChange(
-                                    hit.nx, hit.ny, hit.nz,
-                                    static_cast<uint8_t>(to_place));
+                                    hit.bx, hit.by, hit.bz,
+                                    static_cast<uint8_t>(BlockType::Air));
+                        } else {
+                            impl_->mob_mgr.playerMeleeAttack(
+                                pos.x, pos.y, pos.z, front.x, front.z);
                         }
                     }
+
+                    // 弓装備中: 右クリック長押しでチャージ、離して発射。
+                    // それ以外: 右クリックでブロックを設置。
+                    const bool rmb_held =
+                        glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+                    if (bow_equipped) {
+                        if (rmb_held) {
+                            impl_->bow_charging    = true;
+                            impl_->bow_charge_time += dt;
+                            if (impl_->bow_charge_time > 1.5f)
+                                impl_->bow_charge_time = 1.5f;
+                        } else if (impl_->bow_charging) {
+                            // 離した瞬間: 矢を発射
+                            // チャージ 0.1秒以下なら最低威力、1.0秒以上で最大威力
+                            float t = (impl_->bow_charge_time - 0.1f) / 0.9f;
+                            if (t < 0.0f) t = 0.0f;
+                            if (t > 1.0f) t = 1.0f;
+                            const float speed = 8.0f + 28.0f * t;
+                            // 矢の発射位置: カメラ少し前方・少し下
+                            const glm::vec3 spawn = pos + front * 0.4f
+                                                        - glm::vec3(0.0f, 0.15f, 0.0f);
+                            impl_->arrow_mgr.spawn(spawn.x, spawn.y, spawn.z,
+                                                   front.x * speed,
+                                                   front.y * speed,
+                                                   front.z * speed);
+                            impl_->attack_sync_timer = 0.20f;
+                            impl_->bow_charging    = false;
+                            impl_->bow_charge_time = 0.0f;
+                        }
+                    } else {
+                        // 弓を持っていないときはチャージ状態をリセット
+                        impl_->bow_charging    = false;
+                        impl_->bow_charge_time = 0.0f;
+
+                        // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
+                        if (hit.hit && inp.wasRightClicked()) {
+                            BlockType to_place = held;
+                            if (to_place != BlockType::Air && !isItem(to_place) &&
+                                inventoryConsumeSelected(inv)) {
+                                impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
+                                                           to_place);
+                                rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                                if (impl_->multiplayer)
+                                    impl_->net_client.sendBlockChange(
+                                        hit.nx, hit.ny, hit.nz,
+                                        static_cast<uint8_t>(to_place));
+                            }
+                        }
+                    }
+                } else {
+                    // カーソル解放中はチャージを中断
+                    impl_->bow_charging    = false;
+                    impl_->bow_charge_time = 0.0f;
                 }
-            } else {
-                // カーソル解放中はチャージを中断
-                impl_->bow_charging    = false;
-                impl_->bow_charge_time = 0.0f;
             }
         }
 
@@ -991,6 +1001,9 @@ void Engine::run() {
 
         // ホットバー（画面下中央）を描画
         impl_->renderer.drawHotbar(impl_->inventory);
+        if (impl_->craft_menu_open)
+            impl_->renderer.drawCraftMenu(
+                impl_->inventory, getRecipes(), impl_->craft_selected);
 
         // ミニマップ（左上）を更新して描画（M キーでトグル）
         if (impl_->show_minimap_) {

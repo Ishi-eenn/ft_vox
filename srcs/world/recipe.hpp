@@ -23,7 +23,7 @@ struct Recipe {
 // クラフトメニューに表示する全レシピ。表示順 = 配列順。
 const std::vector<Recipe>& getRecipes();
 
-// inv の所持数がレシピを満たすか判定。
+// inv が素材と出力先の空きを満たし、レシピを実行できるか判定。
 bool canCraft(const Inventory& inv, const Recipe& r);
 
 // 素材を消費して出力をインベントリに追加する。canCraft が true のときに呼ぶ。
