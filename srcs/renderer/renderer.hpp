@@ -8,6 +8,7 @@
 #include "renderer/title_screen.hpp"
 #include "renderer/minimap.hpp"
 #include "mob/zombie.hpp"
+#include "mob/arrow.hpp"
 #include <map>
 #include <cstdint>
 #include <vector>
@@ -41,7 +42,8 @@ public:
     void drawDeathScreen();
     void drawHotbar(const Inventory& inv);
     void drawUnderwaterOverlay();
-    void drawFirstPersonHand(float walk_phase, float attack_timer_norm);
+    void drawFirstPersonHand(float walk_phase, float attack_timer_norm,
+                              bool bow_equipped = false, float bow_charge = 0.0f);
     bool drawTitleScreen(float dt);
     void updateMinimap(World& world, float px, float pz, float yaw_deg, float dt);
     void drawMinimap();
@@ -49,6 +51,8 @@ public:
                            const float* view4x4, const float* proj4x4);
     void drawMobs(const std::vector<Zombie>& zombies,
                   const float* view4x4, const float* proj4x4);
+    void drawArrows(const std::vector<Arrow>& arrows,
+                    const float* view4x4, const float* proj4x4);
     void endFrame() override;
     void onResize(int w, int h) override;
     void setTimeOfDay(float t);

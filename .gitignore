@@ -6,6 +6,8 @@ ft_vox
 *.d
 .DS_Store
 .claude
+CLAUDE.md
+IMPLEMENTATION_STATUS.md
 .cache
 en.subject.pdf
 saves/

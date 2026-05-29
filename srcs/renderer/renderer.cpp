@@ -942,7 +942,7 @@ void Renderer::drawDeathScreen() {
 // drawHotbar() — 画面下中央にホットバー（9スロット）を描画する
 //
 // パス1: hud_shader_    — スロット背景
-// パス2: hotbar_shader_ — 3Dアイソメトリックブロック（上面・左面・右面）
+// パス2: hotbar_shader_ — 3Dアイソメトリックブロック + 平面アイテム
 // パス3: hud_shader_    — 枠線 + 選択ハイライト + 個数（7セグ）
 //
 // 【アイソメトリックキューブの頂点レイアウト】
@@ -1023,6 +1023,7 @@ void Renderer::drawHotbar(const Inventory& inv) {
         for (int i = 0; i < HOTBAR_SIZE; ++i) {
             const ItemStack& s = inv.slots[i];
             if (s.type == BlockType::Air || s.count <= 0) continue;
+            if (s.type == BlockType::Bow) continue;
 
             AtlasUV uv = atlas_.getUV(s.type);
             float uc = (uv.u0 + uv.u1) * 0.5f;
@@ -1071,6 +1072,47 @@ void Renderer::drawHotbar(const Inventory& inv) {
                 tri[5][0]=M_x;  tri[5][1]=M_y;  tri[5][2]=uv.u1;  tri[5][3]=uv.v0;
             }
 
+            for (int v = 0; v < 6; ++v)
+                for (int c = 0; c < 4; ++c)
+                    verts[vc++] = tri[v][c];
+            ++drawn;
+        }
+
+        if (drawn > 0) {
+            glBindBuffer(GL_ARRAY_BUFFER, hotbar_tex_vbo_);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, vc * sizeof(float), verts);
+            glDrawArrays(GL_TRIANGLES, 0, drawn * 6);
+        }
+    }
+
+    // 弓はブロックではないので、Bow.png の平面アイコンとして表示する。
+    {
+        hotbar_shader_.setFloat("uBright", 1.0f);
+        float verts[HOTBAR_SIZE * 6 * 4] = {};
+        int vc = 0, drawn = 0;
+
+        for (int i = 0; i < HOTBAR_SIZE; ++i) {
+            const ItemStack& s = inv.slots[i];
+            if (s.type != BlockType::Bow || s.count <= 0) continue;
+
+            AtlasUV uv = atlas_.getUV(BlockType::Bow);
+            const float cx = nx(sx0_px + i * (SLOT_PX + GAP_PX) + SLOT_PX * 0.5f);
+            const float cy = ny(BOTTOM_PX + SLOT_PX * 0.5f);
+            const float iw = 34.0f / hw;
+            const float ih = 34.0f / hh;
+            const float x0 = cx - iw * 0.5f;
+            const float x1 = cx + iw * 0.5f;
+            const float y0 = cy - ih * 0.5f;
+            const float y1 = cy + ih * 0.5f;
+
+            const float tri[6][4] = {
+                {x0, y0, uv.u0, uv.v1},
+                {x1, y0, uv.u1, uv.v1},
+                {x1, y1, uv.u1, uv.v0},
+                {x0, y0, uv.u0, uv.v1},
+                {x1, y1, uv.u1, uv.v0},
+                {x0, y1, uv.u0, uv.v0},
+            };
             for (int v = 0; v < 6; ++v)
                 for (int c = 0; c < 4; ++c)
                     verts[vc++] = tri[v][c];
@@ -2268,6 +2310,80 @@ void Renderer::drawMobs(const std::vector<Zombie>& zombies,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// drawArrows() — 飛行中の矢を細長い直方体で描画する
+//
+// 速度ベクトル v から yaw / pitch を算出し、矢の長軸が進行方向と一致するよう
+// 回転を掛ける。刺さって停止中の矢は最後の速度方向を保持して描画する。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawArrows(const std::vector<Arrow>& arrows,
+                           const float* view4x4, const float* proj4x4) {
+    if (arrows.empty() || !entity_vao_) return;
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir", sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    // 茶色のシャフトと灰色の矢じりで構成
+    static const float kShaft[]    = {0.55f, 0.36f, 0.18f};
+    static const float kFletching[] = {0.85f, 0.85f, 0.85f};
+
+    for (const Arrow& a : arrows) {
+        if (!a.alive) continue;
+
+        // 進行方向から yaw / pitch を算出（ベクトルが極端に小さい場合は前方扱い）
+        float vx = a.vx, vy = a.vy, vz = a.vz;
+        float len2 = vx*vx + vy*vy + vz*vz;
+        if (len2 < 1e-6f) { vx = 1.0f; vy = 0.0f; vz = 0.0f; }
+
+        const float horiz = std::sqrt(vx*vx + vz*vz);
+        const float yaw   = std::atan2(vz, vx);    // ラジアン
+        const float pitch = std::atan2(vy, horiz);
+
+        // ピボット = 矢の先端。中心軸を +X 方向にしておき、yaw / pitch で回す。
+        glm::mat4 m = glm::translate(glm::mat4(1.0f), glm::vec3(a.x, a.y, a.z));
+        m = glm::rotate(m, yaw,   glm::vec3(0.f, -1.f, 0.f));
+        m = glm::rotate(m, pitch, glm::vec3(0.f, 0.f, 1.f));
+
+        // シャフト本体（長さ 0.6、太さ 0.05）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.30f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.6f, 0.05f, 0.05f));
+            drawStevePart(vp * mm, mm, kShaft);
+        }
+        // 矢じり（先端、長さ 0.10）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(0.05f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.10f, 0.08f, 0.08f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+        // 矢羽（末端、十字に配置）
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.58f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.12f, 0.02f, 0.18f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+        {
+            glm::mat4 mm = glm::translate(m, glm::vec3(-0.58f, 0.0f, 0.0f));
+            mm = glm::scale(mm, glm::vec3(0.12f, 0.18f, 0.02f));
+            drawStevePart(vp * mm, mm, kFletching);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // drawFirstPersonHand() — ローカルプレイヤーの一人称ハンドアニメーション
 //
 // 画面右下に腕を表示する。歩行時にボブ、攻撃時にスイングアニメーション。
@@ -2276,35 +2392,32 @@ void Renderer::drawMobs(const std::vector<Zombie>& zombies,
 // walk_phase       : 移動中に加算される位相値（radians）
 // attack_timer_norm: attack_sync_timer / 0.28f（1.0=攻撃直後, 0.0=待機）
 // ─────────────────────────────────────────────────────────────────────────────
-void Renderer::drawFirstPersonHand(float walk_phase, float attack_timer_norm) {
+void Renderer::drawFirstPersonHand(float walk_phase, float attack_timer_norm,
+                                    bool bow_equipped, float bow_charge) {
     if (!entity_vao_) return;
 
-    static const float kSkin[] = {0.83f, 0.66f, 0.52f};
+    static const float kSkin[]      = {0.83f, 0.66f, 0.52f};
+    static const float kBowWood[]   = {0.50f, 0.30f, 0.08f};
+    static const float kBowDark[]   = {0.05f, 0.04f, 0.02f};
+    static const float kBowGrip[]   = {0.72f, 0.72f, 0.68f};
 
     const float aspect = static_cast<float>(width_) / static_cast<float>(height_);
-    // 正射影投影: パース歪み（台形）を排除してブロックを綺麗な長方形に見せる
-    // 範囲は FOV 70° で z=-1.5 に相当するビュー空間座標に合わせる
     const float h = tanf(glm::radians(70.0f) * 0.5f) * 1.5f;  // ≈ 1.050
     const float w = h * aspect;
     const glm::mat4 proj = glm::ortho(-w, w, -h, h, 0.05f, 10.0f);
     const glm::mat4 view = glm::mat4(1.0f);
 
-    // 歩行ボブ: 小さな上下 + 左右の揺れ
+    // 歩行ボブ
     const float bob_y = sinf(walk_phase)        * 0.06f;
     const float bob_x = sinf(walk_phase * 0.5f) * 0.03f;
 
-    // 攻撃スイング: Z軸回転で「振り下ろし」
-    // Y=-40° の状態でZ回転すると腕の先が左下に移動 → 振り下ろしに見える
+    // 攻撃スイング（弓装備中は無効）
     const float progress  = 1.0f - std::clamp(attack_timer_norm, 0.0f, 1.0f);
-    const float swing_z   = sinf(progress * glm::pi<float>()) * glm::radians(45.0f);
+    const float swing_z   = bow_equipped
+        ? 0.0f
+        : sinf(progress * glm::pi<float>()) * glm::radians(45.0f);
 
-    // 腕のトランスフォーム: 長方形ブロックを右下コーナーに配置、Y軸で回転して側面を見せる
-    glm::mat4 m = glm::translate(glm::mat4(1.0f),
-        glm::vec3(0.82f + bob_x, -1.30f + bob_y, -1.5f));
-    m = glm::rotate(m, glm::radians(-40.0f),             glm::vec3(0.f, 1.f, 0.f));
-    m = glm::rotate(m, glm::radians(15.0f),              glm::vec3(1.f, 0.f, 0.f));
-    m = glm::rotate(m, glm::radians(10.0f) + swing_z,    glm::vec3(0.f, 0.f, 1.f));
-    m = glm::scale(m, glm::vec3(0.40f, 1.20f, 0.28f));  // Y方向に伸ばして下端を画面外へ
+    const float charge = std::clamp(bow_charge, 0.0f, 1.0f);
 
     entity_shader_.use();
     entity_shader_.setVec3 ("uSunDir",      sun_dir_[0], sun_dir_[1], sun_dir_[2]);
@@ -2320,7 +2433,93 @@ void Renderer::drawFirstPersonHand(float walk_phase, float attack_timer_norm) {
     glDisable(GL_CULL_FACE);
     glBindVertexArray(entity_vao_);
 
-    drawStevePart(proj * m, m, kSkin);
+    if (!bow_equipped) {
+        // ── 通常の腕（弓を持っていないとき） ─────────────────────────────
+        glm::mat4 arm = glm::translate(glm::mat4(1.0f),
+            glm::vec3(0.82f + bob_x, -1.30f + bob_y, -1.5f));
+        arm = glm::rotate(arm, glm::radians(-40.0f),          glm::vec3(0.f, 1.f, 0.f));
+        arm = glm::rotate(arm, glm::radians(15.0f),           glm::vec3(1.f, 0.f, 0.f));
+        arm = glm::rotate(arm, glm::radians(10.0f) + swing_z, glm::vec3(0.f, 0.f, 1.f));
+        glm::mat4 m = glm::scale(arm, glm::vec3(0.40f, 1.20f, 0.28f));
+        drawStevePart(proj * m, m, kSkin);
+        (void)kBowWood; (void)kBowDark; (void)kBowGrip;
+    } else {
+        // ── 弓装備中: BOW2.png を 1 ブロック厚の 3D ボクセルとして描く ────
+        // 16x16 のドットマップをそのまま展開し、minecraft-yumi.png に寄せて
+        // 画面右側に傾けて置く。
+        static const float kBowPal[10][3] = {
+            {1.000f, 1.000f, 1.000f},   // a: white arrow tip
+            {0.286f, 0.212f, 0.082f},   // b: dark wood
+            {0.694f, 0.694f, 0.694f},   // c: light gray
+            {0.847f, 0.847f, 0.847f},   // d: lighter gray
+            {0.537f, 0.404f, 0.153f},   // e: medium wood
+            {0.408f, 0.306f, 0.118f},   // f: darker medium wood
+            {0.157f, 0.118f, 0.043f},   // g: near-black bowstring
+            {0.420f, 0.420f, 0.420f},   // h: medium gray
+            {0.267f, 0.267f, 0.267f},   // i: arrow shaft dark gray
+            {0.588f, 0.588f, 0.588f},   // j: light gray highlight
+        };
+        static const char* kBowPat[16] = {
+            "................",
+            "................",
+            "...a....bbbbbbb.",
+            "...cd.bbefeeefeg",
+            "....gehfggggggg.",
+            "....bgeh......i.",
+            "...bhjge......i.",
+            "...bfh.ge....i..",
+            "..beg...ge...i..",
+            "..bfg....ge..i..",
+            "..beg.....ge.i..",
+            "..beg......ge...",
+            "..beg......i....",
+            "..bfg..iiii.....",
+            "..begii.........",
+            "...g............",
+        };
+
+        // 弓だけは透視投影に切り替える。これで斜めに構えた弓の奥側ブロックが
+        // 画面上で本当に小さく見え、手前のブロックが大きく見える。
+        const float bow_fov  = 45.0f;
+        const float bow_z    = -3.0f;
+        glm::mat4 bow_proj   = glm::perspective(
+            glm::radians(bow_fov), aspect, 0.05f, 20.0f);
+        const float tan_half = tanf(glm::radians(bow_fov) * 0.5f);
+        const float h_bow    = std::abs(bow_z) * tan_half;   // bow_z面でのワールド半高
+
+        const float p     = 0.165f;             // 1ブロックのワールドサイズ
+        const float pull  = charge * 0.06f;     // チャージ中はわずかに手前へ引く
+
+        // 弓全体のルート: 手前に大きく置き、右下を画面外にはみ出させる
+        //   Z +45°: BOW2.png の上限右上→下限左下のナナメを「縦に立った弓」に揃える
+        //   X  +6°: 軽く前傾（弓面に沿った調整）
+        //   Y -75°: 弓面を斜めから見せ、矢の延長線がクロスヘア方向へ
+        //  WX+12°: 最終的にワールドX軸でピッチアップ → 弓全体が若干上向きに
+        // 位置は NDC 比率 (0.75, -0.30) を bow_z 面のワールド座標に変換
+        glm::mat4 root = glm::translate(glm::mat4(1.0f),
+            glm::vec3(0.75f * h_bow * aspect + bob_x - pull,
+                     -0.30f * h_bow         + bob_y,
+                      bow_z));
+        root = glm::rotate(root, glm::radians( 12.0f), glm::vec3(1.f, 0.f, 0.f));
+        root = glm::rotate(root, glm::radians(-75.0f), glm::vec3(0.f, 1.f, 0.f));
+        root = glm::rotate(root, glm::radians(  6.0f), glm::vec3(1.f, 0.f, 0.f));
+        root = glm::rotate(root, glm::radians( 45.0f), glm::vec3(0.f, 0.f, 1.f));
+
+        for (int cy = 0; cy < 16; ++cy) {
+            for (int cx = 0; cx < 16; ++cx) {
+                const char ch = kBowPat[cy][cx];
+                if (ch < 'a' || ch > 'j') continue;
+                const int idx = ch - 'a';
+                // ローカル: 中心(7.5, 7.5) を原点に。Yは画像座標を反転して上向き＋
+                const float lx = (cx - 7.5f) * p;
+                const float ly = (7.5f - cy) * p;
+                glm::mat4 m = glm::translate(root, glm::vec3(lx, ly, 0.0f));
+                m = glm::scale(m, glm::vec3(p, p, p));
+                drawStevePart(bow_proj * m, m, kBowPal[idx]);
+            }
+        }
+        (void)kSkin; (void)kBowWood; (void)kBowDark; (void)kBowGrip;
+    }
 
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);

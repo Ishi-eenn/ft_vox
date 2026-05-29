@@ -31,6 +31,7 @@
 #include "streaming/chunk_manager.hpp"
 #include "network/client.hpp"
 #include "mob/mob_manager.hpp"
+#include "mob/arrow_manager.hpp"
 
 #include <chrono>
 #include <thread>
@@ -145,7 +146,7 @@ static void rebuildModified(int wx, int wz, ChunkManager& mgr) {
 // ブロックをインベントリに1個追加する。既存スタックに積む → 空きスロットを探す。
 static void inventoryAdd(Inventory& inv, BlockType type) {
     if (type == BlockType::Air || type == BlockType::Water ||
-        type == BlockType::ShortGrass) return;
+        type == BlockType::ShortGrass || isItem(type)) return;
     for (int i = 0; i < HOTBAR_SIZE; ++i) {
         if (inv.slots[i].type == type && inv.slots[i].count < STACK_MAX) {
             ++inv.slots[i].count;
@@ -242,6 +243,9 @@ struct Engine::Impl {
 
     // Mobs
     MobManager    mob_mgr;
+    ArrowManager  arrow_mgr;
+    float         bow_charge_time   = 0.0f;   // 右クリック保持時間（秒）
+    bool          bow_charging      = false;
     float         player_health     = 20.0f;
     float         player_max_health = 20.0f;
     bool          player_dead       = false;
@@ -355,6 +359,9 @@ bool Engine::init(uint32_t seed, int width, int height) {
 
     // ── チャンクマネージャーの初期化 ───────────────────────────────────────────
     impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer);
+
+    // 弓を最後のホットバースロットに常備（無限矢扱い）
+    impl_->inventory.slots[HOTBAR_SIZE - 1] = {BlockType::Bow, 1};
 
     running_ = true;
     fprintf(stderr, "[Engine] init OK  seed=%u  %dx%d\n", seed, width_, height_);
@@ -595,6 +602,8 @@ void Engine::run() {
                 glm::vec3 pos   = impl_->player.camera().position();
                 glm::vec3 front = impl_->player.camera().front();
                 RayHit hit = castRay(pos, front, 6.0f, impl_->world);
+                BlockType held = inv.slots[inv.selected].type;
+                const bool bow_equipped = (held == BlockType::Bow);
 
                 // 左クリック: ブロックを壊してインベントリに追加 OR ゾンビを攻撃
                 if (inp.wasLeftClicked()) {
@@ -615,19 +624,60 @@ void Engine::run() {
                             pos.x, pos.y, pos.z, front.x, front.z);
                     }
                 }
-                // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
-                if (hit.hit && inp.wasRightClicked()) {
-                    BlockType to_place = inv.slots[inv.selected].type;
-                    if (to_place != BlockType::Air && inventoryConsume(inv)) {
-                        impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
-                                                   to_place);
-                        rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
-                        if (impl_->multiplayer)
-                            impl_->net_client.sendBlockChange(
-                                hit.nx, hit.ny, hit.nz,
-                                static_cast<uint8_t>(to_place));
+
+                // 弓装備中: 右クリック長押しでチャージ、離して発射。
+                // それ以外: 右クリックでブロックを設置。
+                const bool rmb_held =
+                    glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+
+                if (bow_equipped) {
+                    if (rmb_held) {
+                        impl_->bow_charging    = true;
+                        impl_->bow_charge_time += dt;
+                        if (impl_->bow_charge_time > 1.5f)
+                            impl_->bow_charge_time = 1.5f;
+                    } else if (impl_->bow_charging) {
+                        // 離した瞬間: 矢を発射
+                        // チャージ 0.1秒以下なら最低威力、1.0秒以上で最大威力
+                        float t = (impl_->bow_charge_time - 0.1f) / 0.9f;
+                        if (t < 0.0f) t = 0.0f;
+                        if (t > 1.0f) t = 1.0f;
+                        const float speed = 8.0f + 28.0f * t;
+                        // 矢の発射位置: カメラ少し前方・少し下
+                        const glm::vec3 spawn = pos + front * 0.4f
+                                                    - glm::vec3(0.0f, 0.15f, 0.0f);
+                        impl_->arrow_mgr.spawn(spawn.x, spawn.y, spawn.z,
+                                               front.x * speed,
+                                               front.y * speed,
+                                               front.z * speed);
+                        impl_->attack_sync_timer = 0.20f;
+                        impl_->bow_charging    = false;
+                        impl_->bow_charge_time = 0.0f;
+                    }
+                } else {
+                    // 弓を持っていないときはチャージ状態をリセット
+                    impl_->bow_charging    = false;
+                    impl_->bow_charge_time = 0.0f;
+
+                    // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
+                    if (hit.hit && inp.wasRightClicked()) {
+                        BlockType to_place = held;
+                        if (to_place != BlockType::Air && !isItem(to_place) &&
+                            inventoryConsume(inv)) {
+                            impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
+                                                       to_place);
+                            rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                            if (impl_->multiplayer)
+                                impl_->net_client.sendBlockChange(
+                                    hit.nx, hit.ny, hit.nz,
+                                    static_cast<uint8_t>(to_place));
+                        }
                     }
                 }
+            } else {
+                // カーソル解放中はチャージを中断
+                impl_->bow_charging    = false;
+                impl_->bow_charge_time = 0.0f;
             }
         }
 
@@ -746,6 +796,12 @@ void Engine::run() {
             applyPlayerDamage(dmg, "mob");
         }
 
+        // ── 矢の物理更新（命中判定はホストのみ実行） ─────────────────────────
+        // 非ホストではモブ状態はサーバーから配信されるため矢の更新は行わない（MVP）。
+        if (is_mob_host) {
+            impl_->arrow_mgr.update(dt, isSolid, impl_->mob_mgr.zombiesMut());
+        }
+
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
         // 毎フレーム数チャンクずつ処理し、ゲームが止まらないようにする。
@@ -831,6 +887,9 @@ void Engine::run() {
         // モブ（ゾンビ）を描画
         impl_->renderer.drawMobs(impl_->mob_mgr.zombies(), view4x4, proj4x4);
 
+        // 矢を描画
+        impl_->renderer.drawArrows(impl_->arrow_mgr.arrows(), view4x4, proj4x4);
+
         // 3D 雲レイヤーを描画（不透明ブロックの後、水の前）
         impl_->renderer.drawClouds(view4x4, proj4x4, ppos.x, ppos.z, elapsed_s);
 
@@ -846,10 +905,16 @@ void Engine::run() {
             impl_->renderer.drawUnderwaterOverlay();
 
         // 一人称ハンドアニメーション（死亡時は非表示）
-        if (!impl_->player_dead)
+        if (!impl_->player_dead) {
+            const bool bow_held =
+                impl_->inventory.slots[impl_->inventory.selected].type == BlockType::Bow;
+            const float charge_ratio = std::min(impl_->bow_charge_time / 1.0f, 1.0f);
             impl_->renderer.drawFirstPersonHand(
                 impl_->local_walk_phase,
-                impl_->attack_sync_timer / 0.28f);
+                impl_->attack_sync_timer / 0.28f,
+                bow_held,
+                charge_ratio);
+        }
 
         // HUD（クロスヘア＋FPS＋座標表示）を最前面に描画
         impl_->renderer.drawHud(fps_display,

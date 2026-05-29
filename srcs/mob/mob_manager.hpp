@@ -31,6 +31,7 @@ public:
                           float front_x, float front_z);
 
     const std::vector<Zombie>& zombies() const { return zombies_; }
+    std::vector<Zombie>&       zombiesMut() { return zombies_; }
     void setZombies(std::vector<Zombie> z) { zombies_ = std::move(z); }
     std::vector<MobExplosion> consumeExplosions();
 
