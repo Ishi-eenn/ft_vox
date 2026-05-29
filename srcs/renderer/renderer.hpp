@@ -17,6 +17,7 @@
 struct GLFWwindow;
 class World;
 struct RemotePlayer;
+struct Recipe;
 
 class Renderer : public IRenderer {
 public:
@@ -41,6 +42,8 @@ public:
                         bool multiplayer);
     void drawDeathScreen();
     void drawHotbar(const Inventory& inv);
+    void drawCraftMenu(const Inventory& inv, const std::vector<Recipe>& recipes,
+                       int selected_recipe);
     void drawUnderwaterOverlay();
     void drawFirstPersonHand(float walk_phase, float attack_timer_norm,
                               bool bow_equipped = false, float bow_charge = 0.0f);
