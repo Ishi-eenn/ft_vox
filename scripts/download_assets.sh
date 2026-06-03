@@ -15,15 +15,24 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # =============================================================================
 
 # ── BGM ──────────────────────────────────────────────────────────────────────
-URL_MUSIC_PLAINS="https://opengameart.org/sites/default/files/old%20city%20theme_3.ogg"
-URL_MUSIC_DESERT=""
-URL_MUSIC_TUNDRA=""
-URL_MUSIC_ROCKY=""
-URL_MUSIC_SWAMP="https://opengameart.org/sites/default/files/old%20city%20theme_3.ogg"
-URL_MUSIC_MOUNTAIN=""
-URL_MUSIC_CANYON=""
-URL_MUSIC_SPRING=""
-URL_MUSIC_AUTUMN=""
+# CC-BY 3.0: RPG Exploration Level 1 (HitCtrl)
+URL_MUSIC_PLAINS="https://opengameart.org/sites/default/files/RPG_Exploration_Level_1.ogg"
+# CC0: Desert theme / caravan (Loyalty Freak Music)
+URL_MUSIC_DESERT="https://opengameart.org/sites/default/files/caravan.ogg.ogg"
+# CC0: Ice Shine Bells (hc)
+URL_MUSIC_TUNDRA="https://opengameart.org/sites/default/files/Ice-Shine-Bells_0.ogg"
+# CC0: Cave Theme (Brandon Morris)
+URL_MUSIC_ROCKY="https://opengameart.org/sites/default/files/cave%20themeb4.ogg"
+# CC-BY 3.0: Hazy Darkness Looping (Eric Matyas)
+URL_MUSIC_SWAMP="https://opengameart.org/sites/default/files/hazy_darkness_looping_0.ogg"
+# CC-BY-SA 3.0: DarkWinds orchestral (Zefz)
+URL_MUSIC_MOUNTAIN="https://opengameart.org/sites/default/files/DarkWinds_0.OGG"
+# CC0: Birds and Wind - Ambient (Spring Spring)
+URL_MUSIC_CANYON="https://opengameart.org/sites/default/files/Birds%20and%20Wind%20-%20Ambient_1.ogg"
+# CC0: Flowerbed Fields (Zane Little Music)
+URL_MUSIC_SPRING="https://opengameart.org/sites/default/files/flowerbed_fields.ogg"
+# CC-BY 3.0: The Last Leaf of the Fall (HitCtrl)
+URL_MUSIC_AUTUMN="https://opengameart.org/sites/default/files/the_last_leaf_of_the_fall.ogg"
 
 # ── アンビエント ──────────────────────────────────────────────────────────────
 URL_AMBIENT_PLAINS=""
@@ -83,7 +92,7 @@ fetch() {
   fi
 
   local ext
-  ext="$(url_ext "$url")"
+  ext="$(url_ext "$url" | tr '[:upper:]' '[:lower:]')"
   local dst="${stem}.${ext}"
   echo "  downloading $(basename "$dst") ..."
   if command -v curl &>/dev/null; then
