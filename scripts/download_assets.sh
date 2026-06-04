@@ -46,19 +46,32 @@ URL_AMBIENT_SPRING=""
 URL_AMBIENT_AUTUMN=""
 
 # ── SE（効果音） ──────────────────────────────────────────────────────────────
-URL_SE_FOOTSTEP_GRASS=""
-URL_SE_FOOTSTEP_STONE=""
-URL_SE_FOOTSTEP_SAND=""
-URL_SE_FOOTSTEP_SNOW=""
-URL_SE_FOOTSTEP_WOOD=""
-URL_SE_ATTACK=""
-URL_SE_HURT=""
-URL_SE_SWIM=""
-URL_SE_BLOCK_BREAK=""
-URL_SE_BLOCK_PLACE=""
-URL_SE_MOB_GROAN=""
-URL_SE_MOB_HURT=""
-URL_SE_MOB_EXPLODE=""
+# CC0: grass_1 (Delta12 Studio)
+URL_SE_FOOTSTEP_GRASS="https://opengameart.org/sites/default/files/grass_1.ogg"
+# CC0: snd_footsteps1 (Spring Spring)
+URL_SE_FOOTSTEP_STONE="https://opengameart.org/sites/default/files/snd_footsteps1.wav"
+# CC0: sand_footsteps (various)
+URL_SE_FOOTSTEP_SAND="https://opengameart.org/sites/default/files/sand_footsteps_0.mp3"
+# CC0: tap_stone で代用 (雪は直リンクなし)
+URL_SE_FOOTSTEP_SNOW="https://opengameart.org/sites/default/files/tap_stone.wav"
+# CC0: grass_1 で代用 (木材は直リンクなし)
+URL_SE_FOOTSTEP_WOOD="https://opengameart.org/sites/default/files/grass_1.ogg"
+# CC0: punch_1 (Delta12 Studio)
+URL_SE_ATTACK="https://opengameart.org/sites/default/files/punch_1.ogg"
+# CC0: hurt_1 (Delta12 Studio)
+URL_SE_HURT="https://opengameart.org/sites/default/files/hurt_1.ogg"
+# CC0: swim (Skippy Fish)
+URL_SE_SWIM="https://opengameart.org/sites/default/files/swim.ogg"
+# CC0: small_rock_impact (Spring Spring)
+URL_SE_BLOCK_BREAK="https://opengameart.org/sites/default/files/small_rock_impact.wav"
+# CC0: tap_stone (Spring Spring)
+URL_SE_BLOCK_PLACE="https://opengameart.org/sites/default/files/tap_stone.wav"
+# CC0: zombie groan (saturn91.dev)
+URL_SE_MOB_GROAN="https://opengameart.org/sites/default/files/01_zombey.mp3"
+# CC0: zombie_pain (various)
+URL_SE_MOB_HURT="https://opengameart.org/sites/default/files/zombie_pain.ogg"
+# CC0: explosion1 (various)
+URL_SE_MOB_EXPLODE="https://opengameart.org/sites/default/files/explosion1_0.ogg"
 
 # =============================================================================
 # 以下は変更不要
@@ -101,8 +114,9 @@ fetch() {
     wget -q -O "$dst" "$url"
   fi
 
-  # ダウンロード成功 → プレースホルダーを削除
-  rm -f "${stem}.placeholder" "${stem}.wav"
+  # ダウンロード成功 → プレースホルダーを削除（実ダウンロードが .wav の場合は消さない）
+  rm -f "${stem}.placeholder"
+  if [[ "$ext" != "wav" ]]; then rm -f "${stem}.wav"; fi
 }
 
 # BGM
