@@ -1,4 +1,5 @@
 #include "mob/arrow_manager.hpp"
+#include "mob/dragon_manager.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -16,7 +17,8 @@ void ArrowManager::spawn(float x, float y, float z,
 
 void ArrowManager::update(float dt,
                            const std::function<bool(int,int,int)>& isSolid,
-                           std::vector<Zombie>& zombies) {
+                           std::vector<Zombie>& zombies,
+                           DragonManager* dragon_mgr) {
     if (arrows_.empty()) return;
 
     const float sub_dt = dt / static_cast<float>(SUBSTEPS);
@@ -57,6 +59,18 @@ void ArrowManager::update(float dt,
                 // 位置はブロック面ギリギリに留める
                 a.x = nx; a.y = ny; a.z = nz;
                 break;
+            }
+
+            // ドラゴン命中判定（胴体軸カプセル、ゾンビより優先）
+            if (dragon_mgr && dragon_mgr->exists()) {
+                const EnderDragon* dr = dragon_mgr->dragon();
+                if (dr && dr->state != EnderDragon::State::Dying) {
+                    if (dragon_mgr->distanceToBody(nx, ny, nz) < DRAGON_HIT_RADIUS) {
+                        dragon_mgr->applyDamage(DRAGON_ARROW_DAMAGE);
+                        a.alive = false;
+                        break;
+                    }
+                }
             }
 
             // ゾンビ命中判定（球状）

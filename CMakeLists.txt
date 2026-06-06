@@ -88,6 +88,7 @@ add_executable(
   srcs/network/client.cpp
   srcs/mob/mob_manager.cpp
   srcs/mob/arrow_manager.cpp
+  srcs/mob/dragon_manager.cpp
 )
 
 target_include_directories(

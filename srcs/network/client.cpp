@@ -150,6 +150,36 @@ void NetworkClient::handlePacket(PacketType type, const uint8_t* payload,
         out.push_back(std::move(ev));
         break;
     }
+    case PacketType::DragonSpawn: {
+        if (size < sizeof(PktDragonSpawn)) break;
+        PktDragonSpawn pkt;
+        std::memcpy(&pkt, payload, sizeof(pkt));
+        NetworkEvent ev;
+        ev.kind = NetworkEvent::Kind::DragonSpawn;
+        ev.dragon_spawn_x = pkt.x;
+        ev.dragon_spawn_y = pkt.y;
+        ev.dragon_spawn_z = pkt.z;
+        out.push_back(ev);
+        break;
+    }
+    case PacketType::DragonUpdate: {
+        if (size < sizeof(PktDragonState)) break;
+        PktDragonState pkt;
+        std::memcpy(&pkt, payload, sizeof(pkt));
+        NetworkEvent ev;
+        ev.kind = NetworkEvent::Kind::DragonUpdate;
+        ev.dragon_exists     = pkt.exists;
+        ev.dragon_state      = pkt.state;
+        ev.dragon_x          = pkt.x;
+        ev.dragon_y          = pkt.y;
+        ev.dragon_z          = pkt.z;
+        ev.dragon_yaw        = pkt.yaw;
+        ev.dragon_pitch      = pkt.pitch;
+        ev.dragon_wing_phase = pkt.wing_phase;
+        ev.dragon_health     = pkt.health;
+        out.push_back(ev);
+        break;
+    }
     default:
         break;
     }

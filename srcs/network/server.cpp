@@ -217,6 +217,16 @@ void VoxServer::handlePacket(int from_fd, PacketType type,
         broadcast(PacketType::MobUpdate, payload, size, from_fd);
         break;
     }
+    case PacketType::DragonSpawn: {
+        // 任意プレイヤーが召喚 → 全員に中継 (送信者を除く)
+        broadcast(PacketType::DragonSpawn, payload, size, from_fd);
+        break;
+    }
+    case PacketType::DragonUpdate: {
+        // ホストからのドラゴン状態を他全員に中継
+        broadcast(PacketType::DragonUpdate, payload, size, from_fd);
+        break;
+    }
     default:
         break;
     }

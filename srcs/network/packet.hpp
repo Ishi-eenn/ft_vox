@@ -12,6 +12,8 @@ enum class PacketType : uint8_t {
     BlockChange = 5,   // C→S; S→C broadcast (excluding sender)
     TimeSync    = 6,   // S→C: server time_of_day broadcast
     MobUpdate   = 7,   // C(host)→S; S→C relay to others
+    DragonSpawn  = 8,  // 任意のC→S; S→C broadcast: ドラゴン召喚イベント
+    DragonUpdate = 9,  // C(host)→S; S→C relay to others: ドラゴンの状態
 };
 
 #pragma pack(push, 1)
@@ -56,6 +58,23 @@ struct PktMobEntry {
     float   x, y, z, yaw, health, fuse_timer;
     uint8_t type;    // MobType cast to uint8_t
     uint8_t state;   // Zombie::State cast to uint8_t
+};
+
+// DragonSpawn: 召喚地点 (= 召喚プレイヤーの足元)。受信側でローカル DragonManager に spawn する。
+struct PktDragonSpawn {
+    float x, y, z;
+};
+
+// DragonUpdate: ホストからの権威的なドラゴン状態。
+//   exists=0 のときドラゴン不在 (受信側は despawn)。
+//   exists=1 のとき他フィールドを適用し、必要なら spawn してから上書きする。
+struct PktDragonState {
+    uint8_t exists;       // 0 or 1
+    uint8_t state;        // EnderDragon::State
+    float   x, y, z;
+    float   yaw, pitch;
+    float   wing_phase;
+    float   health;
 };
 
 #pragma pack(pop)

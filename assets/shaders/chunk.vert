@@ -48,13 +48,20 @@ void main() {
     vec3 world_pos = (uModel * vec4(aPos, 1.0)).xyz;
 
     // ── 松明光源: 全松明からの寄与を線形フォールオフで加算 ──
-    // 各光源につき max(0, 1 - dist/range) を加算。複数松明が重なれば明るくなる。
+    // 最適化:
+    //   1) 上限を uTorchCount にしてシェーダコンパイラの完全アンロールを防ぐ。
+    //   2) まず squared distance で早期スキップ (sqrt 回避)。
+    //   3) 範囲内の松明だけ sqrt 1 回 + 線形フォールオフを評価。
     float torch_accum = 0.0;
-    for (int i = 0; i < 16; ++i) {
-        if (i >= uTorchCount) break;
-        float d = distance(world_pos, uTorches[i]);
-        float a = max(0.0, 1.0 - d / uTorchRange);
-        torch_accum += a * a;   // 2乗フォールオフでなめらか
+    float inv_range   = 1.0 / uTorchRange;
+    float range_sq    = uTorchRange * uTorchRange;
+    for (int i = 0; i < uTorchCount; ++i) {
+        vec3  delta = world_pos - uTorches[i];
+        float sq    = dot(delta, delta);
+        if (sq >= range_sq) continue;        // 範囲外: sqrt を省略
+        float d = sqrt(sq);
+        float a = 1.0 - d * inv_range;        // [0..1]、ここまでで a>=0 確定
+        torch_accum += a * a;                 // 2乗フォールオフでなめらか
     }
     // 面の向きを少し考慮 (上面は明るく、下面は暗く)。完全な点光源では物足りないので
     // top/side/bottom の face_shade を再利用してメリハリを付ける。
