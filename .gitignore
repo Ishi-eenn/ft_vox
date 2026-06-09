@@ -12,6 +12,7 @@ IMPLEMENTATION_STATUS.md
 en.subject.pdf
 saves/
 ft_minecraft
+docs/
 
 # Audio assets (>42MB total) — use scripts/download_assets.sh
 assets/music/
