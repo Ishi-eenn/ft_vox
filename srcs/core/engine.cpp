@@ -34,6 +34,7 @@
 #include "network/client.hpp"
 #include "mob/mob_manager.hpp"
 #include "mob/arrow_manager.hpp"
+#include "mob/dragon_manager.hpp"
 #include "audio/audio_manager.hpp"
 #include "audio/biome_audio_system.hpp"
 
@@ -214,6 +215,7 @@ struct Engine::Impl {
     bool          multiplayer    = false;
     float         net_pos_timer  = 0.0f;
     float         mob_sync_timer = 0.0f;   // ホスト用: mob送信インターバル
+    float         dragon_sync_timer = 0.0f; // ホスト用: dragon送信インターバル
 
     // Audio
     AudioManager     audio_mgr;
@@ -225,6 +227,7 @@ struct Engine::Impl {
     // Mobs
     MobManager    mob_mgr;
     ArrowManager  arrow_mgr;
+    DragonManager dragon_mgr;
     float         bow_charge_time   = 0.0f;   // 右クリック保持時間（秒）
     bool          bow_charging      = false;
     float         player_health     = 20.0f;
@@ -337,6 +340,9 @@ bool Engine::init(uint32_t seed, int width, int height) {
     // ── プレイヤー・カメラの初期化 ─────────────────────────────────────────────
     impl_->player.init(window_);
     impl_->player.camera().setAspect((float)width_ / (float)height_);
+
+    // ── 初期ホットバー: テスト用に DragonEgg を 1 個入れておく ──────────────
+    inventoryAdd(impl_->inventory, BlockType::DragonEgg, 1);
 
     // ── チャンクマネージャーの初期化 ───────────────────────────────────────────
     impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer);
@@ -693,13 +699,18 @@ void Engine::run() {
                                     hit.bx, hit.by, hit.bz,
                                     static_cast<uint8_t>(BlockType::Air));
                         } else {
-                            int hit_idx = impl_->mob_mgr.playerMeleeAttack(
-                                pos.x, pos.y, pos.z, front.x, front.z);
+                            // ドラゴンを優先 (より遠くから当たる)。当たらなければゾンビ近接。
+                            bool dragon_hit = impl_->dragon_mgr.playerMeleeAttack(
+                                pos.x, pos.y, pos.z, front.x, front.y, front.z);
                             impl_->audio_mgr.playSe(SoundEvent::Attack);
-                            if (hit_idx >= 0) {
-                                const Zombie& hz = impl_->mob_mgr.zombies()[hit_idx];
-                                impl_->audio_mgr.playSe3D(SoundEvent::MobHurt,
-                                    hz.x, hz.y + 0.9f, hz.z, 32.0f);
+                            if (!dragon_hit) {
+                                int hit_idx = impl_->mob_mgr.playerMeleeAttack(
+                                    pos.x, pos.y, pos.z, front.x, front.z);
+                                if (hit_idx >= 0) {
+                                    const Zombie& hz = impl_->mob_mgr.zombies()[hit_idx];
+                                    impl_->audio_mgr.playSe3D(SoundEvent::MobHurt,
+                                        hz.x, hz.y + 0.9f, hz.z, 32.0f);
+                                }
                             }
                         }
                     }
@@ -738,19 +749,36 @@ void Engine::run() {
                         impl_->bow_charging    = false;
                         impl_->bow_charge_time = 0.0f;
 
-                        // 右クリック: 選択スロットのブロックを設置（在庫があるときのみ）
-                        if (hit.hit && inp.wasRightClicked()) {
-                            BlockType to_place = held;
-                            if (to_place != BlockType::Air && !isItem(to_place) &&
-                                inventoryConsumeSelected(inv)) {
-                                impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
-                                                           to_place);
-                                rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
-                                impl_->audio_mgr.playSe(SoundEvent::BlockPlace);
-                                if (impl_->multiplayer)
-                                    impl_->net_client.sendBlockChange(
-                                        hit.nx, hit.ny, hit.nz,
-                                        static_cast<uint8_t>(to_place));
+                        // 右クリック: 選択スロットのブロックを設置 or アイテム発火
+                        if (inp.wasRightClicked()) {
+                            // DragonEgg: 上空にエンダードラゴンを召喚
+                            if (held == BlockType::DragonEgg) {
+                                if (!impl_->dragon_mgr.exists() &&
+                                    inventoryConsumeSelected(inv)) {
+                                    impl_->dragon_mgr.spawn(pos.x, pos.y, pos.z);
+                                    // マルチプレイ時は他クライアントにも知らせる。
+                                    if (impl_->multiplayer) {
+                                        PktDragonSpawn pkt;
+                                        pkt.x = pos.x; pkt.y = pos.y; pkt.z = pos.z;
+                                        impl_->net_client.sendRaw(
+                                            PacketType::DragonSpawn,
+                                            &pkt, sizeof(pkt));
+                                    }
+                                }
+                            } else if (hit.hit) {
+                                // 通常のブロック設置（在庫があるときのみ）
+                                BlockType to_place = held;
+                                if (to_place != BlockType::Air && !isItem(to_place) &&
+                                    inventoryConsumeSelected(inv)) {
+                                    impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
+                                                               to_place);
+                                    rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                                    impl_->audio_mgr.playSe(SoundEvent::BlockPlace);
+                                    if (impl_->multiplayer)
+                                        impl_->net_client.sendBlockChange(
+                                            hit.nx, hit.ny, hit.nz,
+                                            static_cast<uint8_t>(to_place));
+                                }
                             }
                         }
                     }
@@ -817,6 +845,28 @@ void Engine::run() {
                 } else if (ev.kind == NetworkEvent::Kind::MobUpdate) {
                     if (!is_mob_host)
                         impl_->mob_mgr.setZombies(std::move(ev.mobs));
+                } else if (ev.kind == NetworkEvent::Kind::DragonSpawn) {
+                    // 誰かが召喚した。自分のローカルにまだ無ければ生成する。
+                    if (!impl_->dragon_mgr.exists()) {
+                        impl_->dragon_mgr.spawn(ev.dragon_spawn_x,
+                                                 ev.dragon_spawn_y,
+                                                 ev.dragon_spawn_z);
+                    }
+                } else if (ev.kind == NetworkEvent::Kind::DragonUpdate) {
+                    // ホストからの権威的な状態。非ホストのみ適用する。
+                    if (!is_mob_host) {
+                        DragonManager::NetState st;
+                        st.exists     = ev.dragon_exists != 0;
+                        st.state      = static_cast<EnderDragon::State>(ev.dragon_state);
+                        st.x          = ev.dragon_x;
+                        st.y          = ev.dragon_y;
+                        st.z          = ev.dragon_z;
+                        st.yaw        = ev.dragon_yaw;
+                        st.pitch      = ev.dragon_pitch;
+                        st.wing_phase = ev.dragon_wing_phase;
+                        st.health     = ev.dragon_health;
+                        impl_->dragon_mgr.applyNetState(st);
+                    }
                 }
             }
             // Update walking animation phase for each remote player.
@@ -909,8 +959,42 @@ void Engine::run() {
         // ── 矢の物理更新（命中判定はホストのみ実行） ─────────────────────────
         // 非ホストではモブ状態はサーバーから配信されるため矢の更新は行わない（MVP）。
         if (is_mob_host) {
-            impl_->arrow_mgr.update(dt, isSolid, impl_->mob_mgr.zombiesMut());
+            impl_->arrow_mgr.update(dt, isSolid, impl_->mob_mgr.zombiesMut(),
+                                     &impl_->dragon_mgr);
         }
+
+        // ── エンダードラゴン更新と同期 ──────────────────────────────────────
+        // ホスト: AI + 接触ダメージ判定 + 状態を 10Hz でブロードキャスト
+        // 非ホスト: AI を回さず、受信した状態で上書きされるのを待つ
+        //   (受信間 0.1秒はローカル update を回しておくと滑らかになる)
+        if (is_mob_host) {
+            const float dragon_dmg = impl_->dragon_mgr.update(
+                dt, ppos.x, ppos.y, ppos.z);
+            if (dragon_dmg > 0.0f)
+                applyPlayerDamage(dragon_dmg, "dragon");
+
+            if (impl_->multiplayer) {
+                impl_->dragon_sync_timer -= dt;
+                if (impl_->dragon_sync_timer <= 0.0f) {
+                    impl_->dragon_sync_timer = 0.1f;  // 10 Hz
+                    DragonManager::NetState s = impl_->dragon_mgr.snapshot();
+                    PktDragonState pkt;
+                    pkt.exists     = s.exists ? 1u : 0u;
+                    pkt.state      = static_cast<uint8_t>(s.state);
+                    pkt.x          = s.x;
+                    pkt.y          = s.y;
+                    pkt.z          = s.z;
+                    pkt.yaw        = s.yaw;
+                    pkt.pitch      = s.pitch;
+                    pkt.wing_phase = s.wing_phase;
+                    pkt.health     = s.health;
+                    impl_->net_client.sendRaw(PacketType::DragonUpdate,
+                                               &pkt, sizeof(pkt));
+                }
+            }
+        }
+        // 非ホストはローカル AI を回さない (受信ステートで上書き)。
+        // Phase C MVP では 10Hz の snap、補間は今後検討。
 
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
@@ -1033,6 +1117,12 @@ void Engine::run() {
         // 矢を描画
         impl_->renderer.drawArrows(impl_->arrow_mgr.arrows(), view4x4, proj4x4);
 
+        // エンダードラゴンを描画（存在する場合のみ）
+        if (impl_->dragon_mgr.exists()) {
+            impl_->renderer.drawDragon(*impl_->dragon_mgr.dragon(),
+                                        view4x4, proj4x4);
+        }
+
         // 3D 雲レイヤーを描画（不透明ブロックの後、水の前）
         impl_->renderer.drawClouds(view4x4, proj4x4, ppos.x, ppos.z, elapsed_s);
 
@@ -1066,6 +1156,14 @@ void Engine::run() {
                                 (int)std::floor(ppos.z),
                                 impl_->player_health,
                                 impl_->player_max_health);
+
+        // エンダードラゴンの HP バー（存在し、まだ戦闘中の場合のみ）
+        if (impl_->dragon_mgr.exists()) {
+            const EnderDragon* dr = impl_->dragon_mgr.dragon();
+            if (dr && dr->state != EnderDragon::State::Dying) {
+                impl_->renderer.drawBossBar(dr->health, DRAGON_MAX_HEALTH);
+            }
+        }
 
         if (impl_->show_stats_) {
             const char* biome_name = impl_->world.getBiomeNameAt(ppos.x, ppos.z);

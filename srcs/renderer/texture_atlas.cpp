@@ -691,6 +691,43 @@ static void fillBow(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
     }
 }
 
+// ドラゴンエッグアイコン 16x16 (黒紫の卵 + ピンクの斑点)
+static void fillDragonEgg(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+    static const char* pix[16] = {
+        "................",
+        "......aaaa......",
+        ".....abbbba.....",
+        "....abbbcbba....",
+        "...abbcbbbbba...",
+        "...abbbbcbbba...",
+        "..abbcbbbbbcba..",
+        "..abbbbbcbbbba..",
+        "..abbbcbbbbbba..",
+        "..abbbbbbbcbba..",
+        "..abbbcbbbbbba..",
+        "...abbbbbcbba...",
+        "...abbcbbbbba...",
+        "....abbbbbba....",
+        ".....abbbba.....",
+        "......aaaa......",
+    };
+    auto put = [&](int px, int py, char c) {
+        switch (c) {
+            case 'a': setPixel(buf, atlas_w, ox, oy, px, py,  10,   4,  18); break; // 縁: 黒
+            case 'b': setPixel(buf, atlas_w, ox, oy, px, py,  35,  18,  55); break; // 本体: 暗紫
+            case 'c': setPixel(buf, atlas_w, ox, oy, px, py, 180,  90, 200); break; // 斑点: 紫光
+            default:  setPixel(buf, atlas_w, ox, oy, px, py,   0,   0,   0, 0); break;
+        }
+    };
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px)
+            put(px, py, pix[py][px]);
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +768,7 @@ bool TextureAtlas::generate() {
     fillBow      (pixels, atlas_w, 2, 2);            // Bow        tile=18
     fillStick    (pixels, atlas_w, 3, 2);            // Stick      tile=19
     fillTorch    (pixels, atlas_w, 4, 2);            // Torch      tile=20
+    fillDragonEgg(pixels, atlas_w, 5, 2);            // DragonEgg  tile=21
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);

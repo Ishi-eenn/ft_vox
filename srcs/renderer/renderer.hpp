@@ -9,6 +9,7 @@
 #include "renderer/minimap.hpp"
 #include "mob/zombie.hpp"
 #include "mob/arrow.hpp"
+#include "mob/ender_dragon.hpp"
 #include <map>
 #include <cstdint>
 #include <vector>
@@ -56,6 +57,9 @@ public:
                   const float* view4x4, const float* proj4x4);
     void drawArrows(const std::vector<Arrow>& arrows,
                     const float* view4x4, const float* proj4x4);
+    void drawDragon(const EnderDragon& dragon,
+                    const float* view4x4, const float* proj4x4);
+    void drawBossBar(float health, float max_health);
     void endFrame() override;
     void onResize(int w, int h) override;
     void setTimeOfDay(float t);

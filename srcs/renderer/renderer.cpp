@@ -1579,6 +1579,34 @@ static void setTorchUniforms(Shader& shader, int count,
         shader.setVec3Array("uTorches[0]", count, positions_xyz);
 }
 
+// 指定チャンク (cx, cz) の AABB に対し、TORCH_RANGE 以内に届く松明だけを抽出する。
+//   - グローバルの torch_positions (近傍 16 件、距離順) から
+//   - chunk AABB (16x16 XZ) に対する最近接距離が range 以下のものを out_xyz に詰める
+//   - y 方向は無視 (松明と地表の高さは大体近い + チャンクは Y=0..256 と長い)
+static void cullTorchesForChunk(int cx, int cz,
+                                  int torch_count, const float* torch_positions,
+                                  float range,
+                                  float* out_xyz, int& out_count) {
+    const float range_sq = range * range;
+    const float xmin = (float)(cx * 16), xmax = xmin + 16.0f;
+    const float zmin = (float)(cz * 16), zmax = zmin + 16.0f;
+    out_count = 0;
+    for (int i = 0; i < torch_count; ++i) {
+        const float tx = torch_positions[i * 3 + 0];
+        const float ty = torch_positions[i * 3 + 1];
+        const float tz = torch_positions[i * 3 + 2];
+        const float cx_clamped = tx < xmin ? xmin : (tx > xmax ? xmax : tx);
+        const float cz_clamped = tz < zmin ? zmin : (tz > zmax ? zmax : tz);
+        const float dx = tx - cx_clamped;
+        const float dz = tz - cz_clamped;
+        if (dx * dx + dz * dz >= range_sq) continue;
+        out_xyz[out_count * 3 + 0] = tx;
+        out_xyz[out_count * 3 + 1] = ty;
+        out_xyz[out_count * 3 + 2] = tz;
+        ++out_count;
+    }
+}
+
 static void setFogUniforms(Shader& shader, const float sky_horizon[3],
                            bool underwater) {
     if (underwater) {
@@ -1617,7 +1645,14 @@ void Renderer::drawChunk(const Chunk* chunk, const float* view4x4, const float* 
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
     setFogUniforms(chunk_shader_, sky_horizon_, underwater_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
-    setTorchUniforms(chunk_shader_, torch_count_, torch_positions_, TORCH_RANGE);
+    {
+        float culled_xyz[MAX_TORCH_LIGHTS * 3];
+        int   culled_count = 0;
+        cullTorchesForChunk(chunk->pos.x, chunk->pos.z,
+                              torch_count_, torch_positions_, TORCH_RANGE,
+                              culled_xyz, culled_count);
+        setTorchUniforms(chunk_shader_, culled_count, culled_xyz, TORCH_RANGE);
+    }
 
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
@@ -1671,7 +1706,14 @@ void Renderer::drawChunkWater(const Chunk* chunk, const float* view4x4, const fl
     setChunkLightingUniforms(chunk_shader_, sun_dir_, ambient_, sun_strength_);
     setFogUniforms(chunk_shader_, sky_horizon_, underwater_);
     chunk_shader_.setFloat("uSunStrength", sun_strength_);
-    setTorchUniforms(chunk_shader_, torch_count_, torch_positions_, TORCH_RANGE);
+    {
+        float culled_xyz[MAX_TORCH_LIGHTS * 3];
+        int   culled_count = 0;
+        cullTorchesForChunk(chunk->pos.x, chunk->pos.z,
+                              torch_count_, torch_positions_, TORCH_RANGE,
+                              culled_xyz, culled_count);
+        setTorchUniforms(chunk_shader_, culled_count, culled_xyz, TORCH_RANGE);
+    }
 
     atlas_.bind(0);
     chunk_shader_.setInt("uAtlas", 0);
@@ -2620,6 +2662,227 @@ void Renderer::drawArrows(const std::vector<Arrow>& arrows,
 
     glEnable(GL_CULL_FACE);
     glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawDragon() — エンダードラゴンを多パーツで描画する
+//
+// 構成: 頭・首・胴・尾(3)・翼(2)・脚(4) の計 11 パーツ。
+// すべて単位立方体ボックスを translate/rotate/scale で配置する。
+//
+// 座標系:
+//   ・ドラゴンの「胴体中心」がワールド座標 (x,y,z)。
+//   ・モデルローカルでは +X が前方 (頭側)、-X が後方 (尾側)、
+//     ±Z が左右の翼、+Y が上面。
+//   ・yaw=0 で +X 方向。Camera と同じ慣習なので yaw-90° で +Z 向きの
+//     デフォルトモデルを回転させる。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawDragon(const EnderDragon& d,
+                           const float* view4x4, const float* proj4x4) {
+    if (!entity_vao_) return;
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir", sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    // パレット: エンダードラゴンの黒紫。被弾フラッシュ中は赤寄せ。
+    const float flash = (d.hit_flash_timer > 0.0f)
+                          ? std::min(d.hit_flash_timer / 0.15f, 1.0f) : 0.0f;
+    const float kBody[] = {
+        0.10f * (1.0f - flash) + 0.95f * flash,
+        0.06f * (1.0f - flash) + 0.10f * flash,
+        0.14f * (1.0f - flash) + 0.10f * flash,
+    };
+    const float kDark[] = {
+        0.03f * (1.0f - flash) + 0.70f * flash,
+        0.02f * (1.0f - flash) + 0.05f * flash,
+        0.05f * (1.0f - flash) + 0.05f * flash,
+    };
+    static const float kEye[]  = {0.80f, 0.20f, 0.85f};   // 紫眼 (フラッシュ無関係)
+
+    // 全体変換: 胴体中心に移動 → yaw → pitch → 全体スケール
+    // yaw=0 → +X 向き。デフォルトモデルも +X 前なので回転は yaw のまま。
+    // kModelScale を上げると全パーツの位置と大きさが等比で拡大される。
+    constexpr float kModelScale = 2.0f;
+    glm::mat4 global = glm::translate(glm::mat4(1.0f), glm::vec3(d.x, d.y, d.z));
+    global = glm::rotate(global, glm::radians(d.yaw),   glm::vec3(0.f, -1.f, 0.f));
+    global = glm::rotate(global, glm::radians(d.pitch), glm::vec3(0.f, 0.f, 1.f));
+    global = glm::scale(global, glm::vec3(kModelScale));
+
+    // ── 胴体 (Body): +X 前方に伸ばした楕円体的な箱 ─────────────────────
+    {
+        glm::vec3 sz(3.5f, 1.4f, 1.8f);
+        glm::mat4 m = glm::translate(global, glm::vec3(0.0f, 0.0f, 0.0f));
+        m = glm::scale(m, sz);
+        drawStevePart(vp * m, m, kBody);
+    }
+
+    // ── 首 (Neck): 胴体前から斜めに前上方へ ───────────────────────────
+    {
+        glm::vec3 sz(1.6f, 0.9f, 0.9f);
+        glm::mat4 m = glm::translate(global, glm::vec3(2.3f, 0.45f, 0.0f));
+        m = glm::rotate(m, glm::radians(-12.0f), glm::vec3(0.f, 0.f, 1.f));
+        m = glm::scale(m, sz);
+        drawStevePart(vp * m, m, kBody);
+    }
+
+    // ── 頭 (Head): 首の先端 ──────────────────────────────────────────
+    {
+        glm::vec3 sz(1.8f, 1.2f, 1.4f);
+        glm::mat4 m = glm::translate(global, glm::vec3(3.4f, 0.9f, 0.0f));
+        m = glm::scale(m, sz);
+        drawStevePart(vp * m, m, kBody);
+    }
+
+    // ── 目 (左右): 頭の側面に紫色の小箱 ────────────────────────────────
+    for (int side = 0; side < 2; ++side) {
+        const float zs = (side == 0) ? 0.71f : -0.71f;
+        glm::vec3 sz(0.30f, 0.20f, 0.05f);
+        glm::mat4 m = glm::translate(global, glm::vec3(3.7f, 1.10f, zs));
+        m = glm::scale(m, sz);
+        drawStevePart(vp * m, m, kEye);
+    }
+
+    // ── 翼 (左右): 胴体上面から左右に伸ばす平板。
+    //    羽ばたきは flap_angle で Z 軸回転 (前縁を基準にバタつかせる)。
+    const float flap = std::sin(d.wing_phase) * 0.45f;  // ±25° 程度
+    for (int side = 0; side < 2; ++side) {
+        const float zs    = (side == 0) ? 1.0f : -1.0f;
+        const float angle = flap * zs;  // 左右対称に羽ばたく
+
+        // 翼の根本ピボット (胴体側面上)
+        glm::mat4 m = glm::translate(global, glm::vec3(0.0f, 0.6f, 0.9f * zs));
+        m = glm::rotate(m, angle, glm::vec3(1.f, 0.f, 0.f));
+        // 翼本体を root から +Z (zs 方向) に伸ばす
+        m = glm::translate(m, glm::vec3(0.0f, 0.0f, 1.6f * zs));
+        m = glm::scale(m, glm::vec3(2.6f, 0.15f, 3.2f));
+        drawStevePart(vp * m, m, kDark);
+    }
+
+    // ── 尾 (3 セグメント): 後方に向かって徐々に細くなる
+    //    隣接セグメント間で連結する S 字波動。
+    {
+        const float kSegLen[3]    = {1.6f, 1.4f, 1.2f};
+        const float kSegThick[3]  = {1.0f, 0.7f, 0.45f};
+        const float kSegHeight[3] = {0.9f, 0.65f, 0.4f};
+        float prev_x = -1.75f;   // 胴体後端から開始
+        float prev_y = -0.05f;
+        const float wave = std::sin(d.wing_phase * 0.7f);
+        for (int i = 0; i < 3; ++i) {
+            const float yaw_off = wave * 0.10f * (i + 1);  // 後ろほど大きく波打つ
+            const float seg_yaw = std::sin(d.wing_phase * 0.7f + i * 0.6f) * 0.15f;
+            const float cx = prev_x - kSegLen[i] * 0.5f;
+            const float cy = prev_y - 0.05f * (i + 1);
+            glm::mat4 m = glm::translate(global, glm::vec3(cx, cy, 0.0f));
+            m = glm::rotate(m, seg_yaw + yaw_off, glm::vec3(0.f, 1.f, 0.f));
+            m = glm::scale(m, glm::vec3(kSegLen[i], kSegHeight[i], kSegThick[i]));
+            drawStevePart(vp * m, m, kBody);
+            prev_x = cx - kSegLen[i] * 0.5f;
+            prev_y = cy;
+        }
+    }
+
+    // ── 脚 (4): 胴体下面の四隅から小さく垂れ下がる
+    {
+        const float lx[4] = { 1.2f,  1.2f, -1.0f, -1.0f};
+        const float lz[4] = { 0.7f, -0.7f,  0.7f, -0.7f};
+        const glm::vec3 leg_sz(0.45f, 0.85f, 0.45f);
+        for (int i = 0; i < 4; ++i) {
+            glm::mat4 m = glm::translate(global, glm::vec3(lx[i], -1.10f, lz[i]));
+            m = glm::scale(m, leg_sz);
+            drawStevePart(vp * m, m, kDark);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawBossBar() — 画面上部にエンダードラゴンのHPバーを描画する
+//
+// 中央上に幅 60% の横長バー。
+//   黒い枠 → 暗赤色の背景 (Max HP) → 紫色の前景 (現在 HP) の 3 層を重ねる。
+// 完全死亡時 (health <= 0) は呼ばないでよい (Engine 側で出し分け)。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawBossBar(float health, float max_health) {
+    if (max_health <= 0.0f) return;
+    const float ratio = std::clamp(health / max_health, 0.0f, 1.0f);
+
+    const float hw = static_cast<float>(width_)  * 0.5f;
+    const float hh = static_cast<float>(height_) * 0.5f;
+    auto nx = [&](float px) { return px / hw - 1.0f; };
+    auto ny = [&](float py) { return py / hh - 1.0f; };
+
+    const float bar_w_px = static_cast<float>(width_) * 0.60f;
+    const float bar_h_px = 18.0f;
+    const float left_px  = (static_cast<float>(width_) - bar_w_px) * 0.5f;
+    const float top_px   = static_cast<float>(height_) - 36.0f;  // 画面上端から下に
+    const float right_px = left_px + bar_w_px;
+    const float bot_px   = top_px  - bar_h_px;
+
+    // (1) 背景 (黒)
+    const float bg_x0 = nx(left_px  - 2.0f);
+    const float bg_x1 = nx(right_px + 2.0f);
+    const float bg_y0 = ny(bot_px   - 2.0f);
+    const float bg_y1 = ny(top_px   + 2.0f);
+    const float bg[12] = {
+        bg_x0, bg_y0, bg_x1, bg_y0, bg_x1, bg_y1,
+        bg_x0, bg_y0, bg_x1, bg_y1, bg_x0, bg_y1,
+    };
+
+    // (2) Max HP 背景 (暗赤)
+    const float mx_x0 = nx(left_px);
+    const float mx_x1 = nx(right_px);
+    const float mx_y0 = ny(bot_px);
+    const float mx_y1 = ny(top_px);
+    const float mx[12] = {
+        mx_x0, mx_y0, mx_x1, mx_y0, mx_x1, mx_y1,
+        mx_x0, mx_y0, mx_x1, mx_y1, mx_x0, mx_y1,
+    };
+
+    // (3) 現在 HP 前景 (紫)
+    const float cur_right_px = left_px + bar_w_px * ratio;
+    const float cu_x0 = nx(left_px);
+    const float cu_x1 = nx(cur_right_px);
+    const float cu_y0 = ny(bot_px);
+    const float cu_y1 = ny(top_px);
+    const float cu[12] = {
+        cu_x0, cu_y0, cu_x1, cu_y0, cu_x1, cu_y1,
+        cu_x0, cu_y0, cu_x1, cu_y1, cu_x0, cu_y1,
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    hud_shader_.use();
+    glBindVertexArray(hud_vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, hud_vbo_);
+
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(bg), bg);
+    hud_shader_.setVec4("uColor", 0.0f, 0.0f, 0.0f, 0.85f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(mx), mx);
+    hud_shader_.setVec4("uColor", 0.35f, 0.05f, 0.10f, 0.90f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    if (ratio > 0.0f) {
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(cu), cu);
+        hud_shader_.setVec4("uColor", 0.60f, 0.10f, 0.85f, 0.95f);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glBindVertexArray(0);
+    glEnable(GL_DEPTH_TEST);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -21,7 +21,14 @@ struct RemotePlayer {
 };
 
 struct NetworkEvent {
-    enum class Kind { BlockChange, PlayerDisconnect, TimeSync, MobUpdate } kind;
+    enum class Kind {
+        BlockChange,
+        PlayerDisconnect,
+        TimeSync,
+        MobUpdate,
+        DragonSpawn,
+        DragonUpdate,
+    } kind;
     uint8_t  player_id  = 0;
     // BlockChange fields
     int      bx = 0, by = 0, bz = 0;
@@ -30,6 +37,15 @@ struct NetworkEvent {
     float    time_of_day = 0.0f;
     // MobUpdate
     std::vector<Zombie> mobs;
+    // DragonSpawn fields
+    float    dragon_spawn_x = 0.0f, dragon_spawn_y = 0.0f, dragon_spawn_z = 0.0f;
+    // DragonUpdate fields
+    uint8_t  dragon_exists  = 0;
+    uint8_t  dragon_state   = 0;
+    float    dragon_x = 0, dragon_y = 0, dragon_z = 0;
+    float    dragon_yaw = 0, dragon_pitch = 0;
+    float    dragon_wing_phase = 0;
+    float    dragon_health = 0;
 };
 
 class NetworkClient {

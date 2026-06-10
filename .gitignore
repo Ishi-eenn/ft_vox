@@ -2,6 +2,7 @@ build/
 objs/
 vendor/
 ft_vox
+ft_minecraft
 *.o
 *.d
 .DS_Store

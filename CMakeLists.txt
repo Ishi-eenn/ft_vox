@@ -113,6 +113,7 @@ add_executable(
   srcs/network/client.cpp
   srcs/mob/mob_manager.cpp
   srcs/mob/arrow_manager.cpp
+  srcs/mob/dragon_manager.cpp
   # ── Audio system ──────────────────────────────────────────────────────────
   srcs/audio/audio_impl.cpp
   srcs/audio/audio_manager.cpp

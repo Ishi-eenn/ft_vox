@@ -26,13 +26,15 @@ enum class BlockType : uint8_t {
     Bow          = 18,  // 弓（アイテム: 設置不可・スタック上限1）
     Stick        = 19,  // 棒（アイテム: 設置不可・クラフト素材）
     Torch        = 20,  // 松明（設置可: 細い柱型 3D メッシュ）
+    DragonEgg    = 21,  // ドラゴンエッグ（アイテム: 右クリックでエンダードラゴンを召喚）
     COUNT
 };
 
 // ブロックではなく "アイテム" として扱う BlockType を判定する。
 // アイテムは右クリックで設置されず、種別固有の挙動を発火する。
 inline bool isItem(BlockType t) {
-    return t == BlockType::Bow || t == BlockType::Stick;
+    return t == BlockType::Bow || t == BlockType::Stick ||
+           t == BlockType::DragonEgg;
 }
 
 enum class Face : uint8_t {
