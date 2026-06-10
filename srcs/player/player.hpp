@@ -22,8 +22,9 @@ public:
     InputHandler& input()        { return input_; }
 
     ChunkPos chunkPos() const;
-    bool isFlyMode()  const { return fly_mode_; }
-    bool isInWater()  const { return in_water_; }
+    bool isFlyMode()  const { return fly_mode_;  }
+    bool isInWater()  const { return in_water_;  }
+    bool isOnGround() const { return on_ground_; }
     void respawnAtInitial();
 
     bool shouldClose() const { return input_.shouldClose(); }
