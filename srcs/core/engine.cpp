@@ -34,6 +34,8 @@
 #include "network/client.hpp"
 #include "mob/mob_manager.hpp"
 #include "mob/arrow_manager.hpp"
+#include "audio/audio_manager.hpp"
+#include "audio/biome_audio_system.hpp"
 
 #include <chrono>
 #include <thread>
@@ -213,6 +215,13 @@ struct Engine::Impl {
     float         net_pos_timer  = 0.0f;
     float         mob_sync_timer = 0.0f;   // ホスト用: mob送信インターバル
 
+    // Audio
+    AudioManager     audio_mgr;
+    BiomeAudioSystem biome_audio;
+    float footstep_timer = 0.0f;
+    float swim_timer     = 0.0f;
+    float groan_timer    = 0.0f;
+
     // Mobs
     MobManager    mob_mgr;
     ArrowManager  arrow_mgr;
@@ -331,6 +340,13 @@ bool Engine::init(uint32_t seed, int width, int height) {
 
     // ── チャンクマネージャーの初期化 ───────────────────────────────────────────
     impl_->chunk_mgr = new ChunkManager(impl_->world, impl_->renderer);
+
+    // ── オーディオシステムの初期化 ─────────────────────────────────────────────
+    if (!impl_->audio_mgr.init("assets")) {
+        fprintf(stderr, "[Engine] Audio init failed — continuing without audio\n");
+    } else {
+        impl_->biome_audio.init(impl_->audio_mgr);
+    }
 
     running_ = true;
     fprintf(stderr, "[Engine] init OK  seed=%u  %dx%d\n", seed, width_, height_);
@@ -454,6 +470,39 @@ void Engine::run() {
                 bool moving = inp.isHeld(GLFW_KEY_W) || inp.isHeld(GLFW_KEY_S)
                            || inp.isHeld(GLFW_KEY_A) || inp.isHeld(GLFW_KEY_D);
                 if (moving) impl_->local_walk_phase += dt * 8.0f;
+
+                // ── 歩行音・水泳音 ──────────────────────────────────────────
+                impl_->footstep_timer -= dt;
+                if (impl_->footstep_timer <= 0.0f && moving) {
+                    if (impl_->player.isInWater()) {
+                        impl_->audio_mgr.playSe(SoundEvent::Swim);
+                        impl_->footstep_timer = 0.55f;
+                    } else if (impl_->player.isOnGround()) {
+                        glm::vec3 p = impl_->player.camera().position();
+                        BlockType below = impl_->world.getWorldBlock(
+                            (int)std::floor(p.x),
+                            (int)std::floor(p.y - 1.2f),
+                            (int)std::floor(p.z));
+                        SoundEvent fs = SoundEvent::FootstepGrass;
+                        switch (below) {
+                            case BlockType::Stone:
+                            case BlockType::GoldOre:
+                            case BlockType::DiamondOre:
+                                fs = SoundEvent::FootstepStone; break;
+                            case BlockType::Sand:
+                            case BlockType::Cactus:
+                                fs = SoundEvent::FootstepSand;  break;
+                            case BlockType::Snow:
+                                fs = SoundEvent::FootstepSnow;  break;
+                            case BlockType::Wood:
+                                fs = SoundEvent::FootstepWood;  break;
+                            default:
+                                fs = SoundEvent::FootstepGrass; break;
+                        }
+                        impl_->audio_mgr.playSe(fs);
+                        impl_->footstep_timer = 0.40f;
+                    }
+                }
             }
         }
         if (impl_->player.shouldClose()) break;
@@ -461,6 +510,7 @@ void Engine::run() {
         auto applyPlayerDamage = [&](float dmg, const char* source) {
             if (dmg <= 0.0f || impl_->player_dead) return;
             impl_->player_health -= dmg;
+            impl_->audio_mgr.playSe(SoundEvent::Hurt);
             fprintf(stderr, "[Game] Player took %.1f damage (%s).\n",
                     dmg, source);
             if (impl_->player_health <= 0.0f) {
@@ -637,13 +687,20 @@ void Engine::run() {
                                                        BlockType::Air);
                             rebuildModified(hit.bx, hit.bz, *impl_->chunk_mgr);
                             inventoryAdd(inv, broken);
+                            impl_->audio_mgr.playSe(SoundEvent::BlockBreak);
                             if (impl_->multiplayer)
                                 impl_->net_client.sendBlockChange(
                                     hit.bx, hit.by, hit.bz,
                                     static_cast<uint8_t>(BlockType::Air));
                         } else {
-                            impl_->mob_mgr.playerMeleeAttack(
+                            int hit_idx = impl_->mob_mgr.playerMeleeAttack(
                                 pos.x, pos.y, pos.z, front.x, front.z);
+                            impl_->audio_mgr.playSe(SoundEvent::Attack);
+                            if (hit_idx >= 0) {
+                                const Zombie& hz = impl_->mob_mgr.zombies()[hit_idx];
+                                impl_->audio_mgr.playSe3D(SoundEvent::MobHurt,
+                                    hz.x, hz.y + 0.9f, hz.z, 32.0f);
+                            }
                         }
                     }
 
@@ -689,6 +746,7 @@ void Engine::run() {
                                 impl_->world.setWorldBlock(hit.nx, hit.ny, hit.nz,
                                                            to_place);
                                 rebuildModified(hit.nx, hit.nz, *impl_->chunk_mgr);
+                                impl_->audio_mgr.playSe(SoundEvent::BlockPlace);
                                 if (impl_->multiplayer)
                                     impl_->net_client.sendBlockChange(
                                         hit.nx, hit.ny, hit.nz,
@@ -713,6 +771,16 @@ void Engine::run() {
 
         // ── マルチプレイ: ネットワーク送受信 ────────────────────────────────────
         glm::vec3 ppos = impl_->player.camera().position();
+
+        // ── オーディオ更新 ──────────────────────────────────────────────────
+        {
+            glm::vec3 front = impl_->player.camera().front();
+            impl_->audio_mgr.setListenerPosition(ppos.x, ppos.y, ppos.z);
+            impl_->audio_mgr.setListenerDirection(front.x, front.y, front.z);
+            const char* biome = impl_->world.getBiomeNameAt(ppos.x, ppos.z);
+            impl_->biome_audio.update(dt, biome);
+            impl_->audio_mgr.update(dt);
+        }
         if (impl_->attack_sync_timer > 0.0f)
             impl_->attack_sync_timer -= dt;
         if (impl_->death_sync_timer > 0.0f)
@@ -811,12 +879,31 @@ void Engine::run() {
             if (is_mob_host) {
                 auto explosions = impl_->mob_mgr.consumeExplosions();
                 for (const MobExplosion& ex : explosions) {
+                    impl_->audio_mgr.playSe3D(SoundEvent::MobExplode,
+                        ex.x, ex.y, ex.z, 64.0f);
                     applyMobExplosion(
                         ex, impl_->world, *impl_->chunk_mgr,
                         impl_->multiplayer ? &impl_->net_client : nullptr);
                 }
             }
             applyPlayerDamage(dmg, "mob");
+
+            // Mob groan: one nearby Chase/Attack zombie emits a sound periodically
+            impl_->groan_timer -= dt;
+            if (impl_->groan_timer <= 0.0f) {
+                impl_->groan_timer = 3.5f;
+                for (const Zombie& z : impl_->mob_mgr.zombies()) {
+                    if (!z.alive()) continue;
+                    if (z.state != Zombie::State::Chase &&
+                        z.state != Zombie::State::Attack) continue;
+                    float dx = z.x - ppos.x, dz = z.z - ppos.z;
+                    if (dx*dx + dz*dz < 40.0f * 40.0f) {
+                        impl_->audio_mgr.playSe3D(SoundEvent::MobGroan,
+                            z.x, z.y + 0.9f, z.z, 40.0f);
+                        break;
+                    }
+                }
+            }
         }
 
         // ── 矢の物理更新（命中判定はホストのみ実行） ─────────────────────────

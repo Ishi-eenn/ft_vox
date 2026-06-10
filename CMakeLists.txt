@@ -55,6 +55,31 @@ if(FT_MINECRAFT_FETCH_DEPS)
     INTERFACE
       ${fastnoiselite_SOURCE_DIR}/Cpp
   )
+
+  # ── miniaudio (single-header audio engine) ─────────────────────────────────
+  FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG 0.11.22
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_GetProperties(miniaudio)
+  if(NOT miniaudio_POPULATED)
+    FetchContent_Populate(miniaudio)
+  endif()
+
+  # ── stb (provides stb_vorbis.c for OGG decoding) ───────────────────────────
+  FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+  )
+  FetchContent_GetProperties(stb)
+  if(NOT stb_POPULATED)
+    FetchContent_Populate(stb)
+  endif()
+
 else()
   find_package(glfw3 REQUIRED)
   find_package(glm CONFIG REQUIRED)
@@ -88,6 +113,11 @@ add_executable(
   srcs/network/client.cpp
   srcs/mob/mob_manager.cpp
   srcs/mob/arrow_manager.cpp
+  # ── Audio system ──────────────────────────────────────────────────────────
+  srcs/audio/audio_impl.cpp
+  srcs/audio/audio_manager.cpp
+  srcs/audio/biome_audio_system.cpp
+  srcs/audio/sound_emitter.cpp
 )
 
 target_include_directories(
@@ -96,6 +126,8 @@ target_include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/srcs
     ${glfw_SOURCE_DIR}/deps
+    ${miniaudio_SOURCE_DIR}
+    ${stb_SOURCE_DIR}
 )
 
 target_compile_definitions(ft_minecraft PRIVATE GLFW_INCLUDE_NONE)
@@ -108,6 +140,8 @@ target_link_libraries(
     glm::glm
     ft_minecraft_fastnoise
     Threads::Threads
+    ${CMAKE_DL_LIBS}  # miniaudio uses dlopen on Linux for audio backends
+    m                 # math library (miniaudio, stb_vorbis)
 )
 
 set_target_properties(
