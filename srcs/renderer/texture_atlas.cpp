@@ -728,6 +728,202 @@ static void fillDragonEgg(uint8_t* buf, int atlas_w, int tile_col, int tile_row)
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// fillCobblestone() — 石レンガのテクスチャを生成する（村の壁用）
+//
+// 丸石風: 暗灰色のベースに、約4×4ブロックのモルタル線入り。
+// Minecraft の cobblestone に近い「分割された石」の見た目。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillCobblestone(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 431);
+            int n2 = hash2(px, py, 557);
+
+            // ベースグレー（Stone より少し暗め）
+            int base = 98 + (n1 - 128) * 20 / 128;
+            int r = base + (n2 - 128) * 4 / 128;
+            int g = base + (n2 - 128) * 4 / 128;
+            int b = base + 4 + (n2 - 128) * 5 / 128;
+
+            // モルタル線（4px 間隔の縦横グリッド）
+            bool mortar_h = (py % 4 == 0 || py % 4 == 1) && hash2(px, py, 13) < 180;
+            bool mortar_v = (px % 4 == 0 || px % 4 == 1) && hash2(px, py, 37) < 180;
+            // 市松パターン: 縦と横が交互にずれる
+            bool offset = (py / 4) % 2 == 0;
+            bool mortar_v2 = ((px + (offset ? 2 : 0)) % 4 == 0) && hash2(px, py, 53) < 180;
+
+            if (mortar_h || mortar_v || mortar_v2) {
+                r = r * 60 / 100;
+                g = g * 60 / 100;
+                b = b * 60 / 100;
+            }
+            // 石ブロック内部の丸み（角を少し暗く）
+            if (!mortar_h && !mortar_v && !mortar_v2 && n2 < 22) {
+                r += 14; g += 14; b += 16;
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillPlanks() — 木の板材テクスチャを生成する（村の屋根・床用）
+//
+// 明るいタン/ベージュ色に横方向の板の継ぎ目（4px 間隔）。
+// Minecraft の oak planks に近い見た目。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillPlanks(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 617);
+            int n2 = hash2(px, py, 743);
+
+            // 明るい木材色（Minecraft oak planks: 淡いタン〜オレンジベージュ）
+            int r = 162 + (n1 - 128) * 14 / 128;
+            int g = 130 + (n1 - 128) * 10 / 128;
+            int b =  72 + (n1 - 128) *  8 / 128;
+
+            // 横方向の板の継ぎ目（4px 間隔）
+            if (py % 4 == 0 && n2 < 200) {
+                r = r * 75 / 100;
+                g = g * 75 / 100;
+                b = b * 75 / 100;
+            }
+            // 板の縦木目（細い）
+            if ((px % 2 == 0) && n1 > 220) {
+                r += 8; g += 6; b += 3;
+            }
+            // 暗いノット（節）
+            if (n2 < 8) { r -= 18; g -= 14; b -= 8; }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillFarmland() — 農耕地テクスチャを生成する
+//
+// 暗くしっとりした土：Dirt より暗く、横方向の耕作溝（2行おき）を表現。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillFarmland(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 883);
+            int n2 = hash2(px, py, 919);
+
+            // 暗い湿った土色
+            int r = 100 + (n1 - 128) * 16 / 128;
+            int g =  70 + (n1 - 128) * 12 / 128;
+            int b =  40 + (n1 - 128) *  8 / 128;
+
+            // 耕作溝（2行ごとに暗い影）
+            if (py % 4 < 2 && n2 < 160) {
+                r = r * 78 / 100;
+                g = g * 78 / 100;
+                b = b * 78 / 100;
+            }
+            // わずかに青みがかった湿り気
+            b += 6;
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillGravelPath() — 砂利道テクスチャを生成する（村の道路用）
+//
+// 混在する灰色・ベージュ・茶色の小石で構成される踏み固めた砂利道。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillGravelPath(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 1013);
+            int n2 = hash2(px, py, 1097);
+            int n3 = hash2(px, py, 1153);
+
+            // ベース: 暗めグレー-ベージュ
+            int r = 136 + (n1 - 128) * 28 / 128;
+            int g = 126 + (n1 - 128) * 24 / 128;
+            int b = 116 + (n1 - 128) * 20 / 128;
+
+            // 石ごとに色味を変える（3種のトーン）
+            if (n2 < 50) {
+                // 暗い小石
+                r -= 24; g -= 22; b -= 20;
+            } else if (n2 > 210) {
+                // 明るい小石
+                r += 18; g += 16; b += 14;
+            } else if (n3 < 40) {
+                // 茶みがかった小石
+                r += 10; g += 2; b -= 8;
+            }
+
+            setPixel(buf, atlas_w, ox, oy, px, py, r, g, b);
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// fillWheatPlant() — 小麦クロスモデル用テクスチャを生成する
+//
+// 黄緑〜黄色の穂：ShortGrass より高く、成熟した小麦の色合い。
+// アルファで背景を透明にしてクロスモデル描画に対応する。
+// ─────────────────────────────────────────────────────────────────────────────
+static void fillWheatPlant(uint8_t* buf, int atlas_w, int tile_col, int tile_row) {
+    const int tw = ATLAS_TILE_SIZE;
+    const int ox = tile_col * tw;
+    const int oy = tile_row * tw;
+
+    for (int py = 0; py < tw; ++py) {
+        for (int px = 0; px < tw; ++px) {
+            int n1 = hash2(px, py, 1201);
+            int n2 = hash2(px, py, 1279);
+
+            // 茎の位置（2px幅の縦縞を数本）
+            bool stem = (px % 4 < 2);
+            // 上部（穂）の高さ（上から6px）は黄色が強め
+            bool head = (py < 6);
+
+            if (stem) {
+                // 茎: 黄緑〜黄色
+                int r = (head ? 200 : 140) + (n1 - 128) * 18 / 128;
+                int g = (head ? 185 : 160) + (n1 - 128) * 14 / 128;
+                int b =  30 + (n1 - 128) * 10 / 128;
+
+                // 穂の先端: 明るい黄色
+                if (head && n2 > 200) { r += 20; g += 10; }
+                // 茎の根元: 少し暗い
+                if (py > 12 && n2 < 50) { r -= 12; g -= 10; }
+
+                setPixel(buf, atlas_w, ox, oy, px, py, r, g, b, 255);
+            } else {
+                // 背景: 完全透明
+                setPixel(buf, atlas_w, ox, oy, px, py, 0, 0, 0, 0);
+            }
+        }
+    }
+}
+
 } // anonymous namespace
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -767,8 +963,14 @@ bool TextureAtlas::generate() {
     fillColoredLeaves(pixels, atlas_w, 1, 2, 195, 105,  30, 22, 18, 10, 613, 821); // OrangeLeaves tile=17 (紅葉オレンジ)
     fillBow      (pixels, atlas_w, 2, 2);            // Bow        tile=18
     fillStick    (pixels, atlas_w, 3, 2);            // Stick      tile=19
-    fillTorch    (pixels, atlas_w, 4, 2);            // Torch      tile=20
-    fillDragonEgg(pixels, atlas_w, 5, 2);            // DragonEgg  tile=21
+    fillTorch    (pixels, atlas_w, 4, 2);            // Torch       tile=20
+    fillDragonEgg(pixels, atlas_w, 5, 2);            // DragonEgg   tile=21
+    fillCobblestone(pixels, atlas_w, 6, 2);          // Cobblestone tile=22
+    fillPlanks     (pixels, atlas_w, 7, 2);          // Planks      tile=23
+    // row=3: 村用農業ブロック
+    fillFarmland   (pixels, atlas_w, 0, 3);          // Farmland    tile=24
+    fillGravelPath (pixels, atlas_w, 1, 3);          // GravelPath  tile=25
+    fillWheatPlant (pixels, atlas_w, 2, 3);          // Wheat       tile=26
 
     // GPU にテクスチャを作成して転送する
     glGenTextures(1, &tex_id_);

@@ -81,7 +81,8 @@ static void getAtlasUV(BlockType type, Face face, float& u0, float& v0, float& u
 static bool isDecorativePlant(BlockType type) {
     return type == BlockType::ShortGrass ||
            type == BlockType::Flower ||
-           type == BlockType::Mushroom;
+           type == BlockType::Mushroom ||
+           type == BlockType::Wheat;
 }
 
 static bool isTorchBlock(BlockType type) {
@@ -98,6 +99,7 @@ static bool isFaceTransparent(BlockType type) {
 static float plantHeight(BlockType type) {
     if (type == BlockType::Mushroom) return 0.55f;
     if (type == BlockType::Flower)   return 0.85f;
+    if (type == BlockType::Wheat)    return 0.90f;
     return 0.72f;
 }
 

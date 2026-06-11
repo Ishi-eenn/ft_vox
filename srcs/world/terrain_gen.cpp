@@ -696,14 +696,15 @@ static void setBlockWorld(Chunk& chunk, int chunk_wx, int chunk_wz,
 // バイオームに応じた村の素材セット
 // ─────────────────────────────────────────────────────────────────────────────
 struct VillageMat {
-    BlockType wall;  // 壁ブロック
-    BlockType roof;  // 屋根ブロック
+    BlockType wall;   // 壁ブロック
+    BlockType roof;   // 屋根ブロック
+    BlockType floor;  // 床ブロック
 };
 
-// ツンドラ寄りなら雪の屋根、平原なら木の屋根
+// ツンドラ: 石壁+雪屋根、平原: 丸石壁+板材屋根（Java Minecraft 再現）
 static VillageMat getVillageMat(float wT) {
-    if (wT > 0.45f) return {BlockType::Stone, BlockType::Snow};
-    return {BlockType::Stone, BlockType::Wood};
+    if (wT > 0.45f) return {BlockType::Stone,       BlockType::Snow,   BlockType::Dirt};
+    return           {BlockType::Cobblestone, BlockType::Planks, BlockType::Planks};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -804,7 +805,7 @@ static void placePlaza(Chunk& chunk, int chunk_wx, int chunk_wz,
                        int vx, int vz, int base_y, int radius) {
     for (int dz = -radius; dz <= radius; ++dz)
         for (int dx = -radius; dx <= radius; ++dx)
-            setBlockWorld(chunk, chunk_wx, chunk_wz, vx + dx, base_y, vz + dz, BlockType::Stone);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, vx + dx, base_y, vz + dz, BlockType::GravelPath);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -824,8 +825,8 @@ static void placeWell(Chunk& chunk, int chunk_wx, int chunk_wz,
                     chunk.setWaterLevel(lx, base_y + 1, lz, 8);
                 }
             } else {
-                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 1, wz, BlockType::Stone);
-                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 2, wz, BlockType::Stone);
+                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 1, wz, BlockType::Cobblestone);
+                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 2, wz, BlockType::Cobblestone);
             }
         }
     }
@@ -843,13 +844,13 @@ static void placePath(Chunk& chunk, const NoiseGen& noise,
     // X方向に進む
     while (x != wx2) {
         int y = computeTerrainHeight(noise, x, z);
-        setBlockWorld(chunk, chunk_wx, chunk_wz, x, y, z, BlockType::Stone);
+        setBlockWorld(chunk, chunk_wx, chunk_wz, x, y, z, BlockType::GravelPath);
         x += sx;
     }
     // Z方向に進む
     while (z != wz2) {
         int y = computeTerrainHeight(noise, x, z);
-        setBlockWorld(chunk, chunk_wx, chunk_wz, x, y, z, BlockType::Stone);
+        setBlockWorld(chunk, chunk_wx, chunk_wz, x, y, z, BlockType::GravelPath);
         z += sz;
     }
 }
@@ -871,7 +872,8 @@ static void placeSmallHut(Chunk& chunk, int chunk_wx, int chunk_wz,
         for (int dx = 0; dx < W; ++dx) {
             int wx = origin_wx + dx, wz = origin_wz + dz;
             bool wall = (dx == 0 || dx == W-1 || dz == 0 || dz == D-1);
-            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz, BlockType::Dirt);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz,
+                          wall ? BlockType::Dirt : mat.floor);
             for (int dy = 1; dy <= WALL_H; ++dy)
                 setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + dy,  wz,
                               wall ? mat.wall : BlockType::Air);
@@ -898,7 +900,8 @@ static void placeHouse(Chunk& chunk, int chunk_wx, int chunk_wz,
         for (int dx = 0; dx < W; ++dx) {
             int wx = origin_wx + dx, wz = origin_wz + dz;
             bool wall = (dx == 0 || dx == W-1 || dz == 0 || dz == D-1);
-            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz, BlockType::Dirt);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz,
+                          wall ? BlockType::Dirt : mat.floor);
             for (int dy = 1; dy <= WALL_H; ++dy)
                 setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + dy,  wz,
                               wall ? mat.wall : BlockType::Air);
@@ -924,7 +927,8 @@ static void placeLargeHouse(Chunk& chunk, int chunk_wx, int chunk_wz,
         for (int dx = 0; dx < W; ++dx) {
             int wx = origin_wx + dx, wz = origin_wz + dz;
             bool wall = (dx == 0 || dx == W-1 || dz == 0 || dz == D-1);
-            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz, BlockType::Dirt);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y,           wz,
+                          wall ? BlockType::Dirt : mat.floor);
             for (int dy = 1; dy <= WALL_H; ++dy)
                 setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + dy,  wz,
                               wall ? mat.wall : BlockType::Air);
@@ -948,19 +952,19 @@ static void placeTower(Chunk& chunk, int chunk_wx, int chunk_wz,
             int wx = origin_wx + dx, wz = origin_wz + dz;
             bool wall = (dx == 0 || dx == W-1 || dz == 0 || dz == D-1);
 
-            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y, wz, BlockType::Stone);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y, wz, BlockType::Cobblestone);
 
             // 壁（Y+1〜+7）
             for (int dy = 1; dy <= 7; ++dy)
                 setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + dy, wz,
-                              wall ? BlockType::Stone : BlockType::Air);
+                              wall ? BlockType::Cobblestone : BlockType::Air);
 
             // 展望台床（Y+8）
-            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 8, wz, BlockType::Stone);
+            setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 8, wz, BlockType::Cobblestone);
 
             // 胸壁（Y+9、外周のみ）
             if (wall)
-                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 9, wz, BlockType::Stone);
+                setBlockWorld(chunk, chunk_wx, chunk_wz, wx, base_y + 9, wz, BlockType::Cobblestone);
         }
     }
 }
@@ -972,10 +976,16 @@ static void placeFarm(Chunk& chunk, int chunk_wx, int chunk_wz,
                       int origin_wx, int origin_wz, int base_y) {
     constexpr int FW = 6, FD = 8;
 
-    for (int dz = 0; dz < FD; ++dz)
-        for (int dx = 0; dx < FW; ++dx)
+    for (int dz = 0; dz < FD; ++dz) {
+        for (int dx = 0; dx < FW; ++dx) {
+            bool edge = (dx == 0 || dx == FW-1 || dz == 0 || dz == FD-1);
             setBlockWorld(chunk, chunk_wx, chunk_wz,
-                         origin_wx + dx, base_y, origin_wz + dz, BlockType::Dirt);
+                         origin_wx + dx, base_y, origin_wz + dz, BlockType::Farmland);
+            if (!edge)
+                setBlockWorld(chunk, chunk_wx, chunk_wz,
+                             origin_wx + dx, base_y + 1, origin_wz + dz, BlockType::Wheat);
+        }
+    }
 
     // 四隅に木の支柱（高さ2）
     static const int cx[4] = {0, FW-1, 0,    FW-1};
@@ -989,221 +999,273 @@ static void placeFarm(Chunk& chunk, int chunk_wx, int chunk_wz,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Layout A — Classic（広場中心型）
+// 有機的な道路ベース村生成（Java Minecraft 再現）
 //
-// 広場を中心に南北大型・東西中型・望楼・農地を配置する伝統的な村。
-// 建物位置はハッシュで ±3 ブロックのジッターを加えてバリエーションを出す。
+// 井戸を起点に4方向へ道路を伸ばし、道路沿いに建物を配置する。
+// 道路はランダムに垂直分岐し、有機的な村の形を生む。
 // ─────────────────────────────────────────────────────────────────────────────
-static void layoutClassic(Chunk& chunk, const NoiseGen& noise, uint32_t vh,
-                           int chunk_wx, int chunk_wz,
-                           int vx, int vz, int base_y,
-                           const VillageMat& mat) {
-    // 建物ごとの位置ジッター（-2〜+2）
-    auto jit = [&](int shift) -> int {
-        return (int)((vh >> shift) % 5u) - 2;
+
+enum class VillDir : uint8_t { NORTH=0, SOUTH=1, EAST=2, WEST=3 };
+enum class VillBType : uint8_t { SmallHut=0, House=1, LargeHouse=2, Tower=3, Farm=4 };
+
+// フットプリント [SmallHut, House, LargeHouse, Tower, Farm]
+static constexpr int kBFW[5] = {5, 7, 9, 4, 6};  // X幅
+static constexpr int kBFD[5] = {4, 5, 7, 4, 8};  // Z奥行き
+
+// 重みテーブル (Java weights を集約)
+// SmallHut=3, House=35(House1+House2), LargeHouse=27(House4Garden+Hall+House3), Tower=20(Church), Farm=6
+static constexpr int kBWeight[5]   = {3, 35, 27, 20, 6};
+static constexpr int kBWeightTotal = 91;
+
+struct VillBuilding {
+    int       ox, oz;
+    VillBType type;
+    int8_t    orient;     // 0=-Z扉, 1=+X扉, 2=+Z扉, 3=-X扉
+    int8_t    road_idx;
+};
+
+struct VillRoad {
+    int     sx, sz;
+    VillDir dir;
+    int     length;
+    int     depth;
+};
+
+struct VillageLayout {
+    VillBuilding buildings[48];
+    int          n_buildings;
+    VillRoad     roads[32];
+    int          n_roads;
+};
+
+struct VillRNG {
+    uint64_t state;
+    explicit VillRNG(uint32_t seed) {
+        state = (uint64_t)seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        next(); next();
+    }
+    uint32_t next() {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (uint32_t)(state >> 33);
+    }
+    int nextInt(int n) { return n <= 1 ? 0 : (int)(next() % (uint32_t)n); }
+};
+
+static VillDir perpLeft(VillDir d) {
+    static const VillDir t[4] = {VillDir::WEST, VillDir::EAST, VillDir::NORTH, VillDir::SOUTH};
+    return t[(int)d];
+}
+static VillDir perpRight(VillDir d) {
+    static const VillDir t[4] = {VillDir::EAST, VillDir::WEST, VillDir::SOUTH, VillDir::NORTH};
+    return t[(int)d];
+}
+
+static VillBType selectBType(VillRNG& rng) {
+    int r = rng.nextInt(kBWeightTotal);
+    for (int i = 0; i < 5; ++i) {
+        r -= kBWeight[i];
+        if (r < 0) return (VillBType)i;
+    }
+    return VillBType::House;
+}
+
+static bool overlapsAny(const VillageLayout& lay, int ox, int oz, int fw, int fd) {
+    for (int k = 0; k < lay.n_buildings; ++k) {
+        const VillBuilding& b = lay.buildings[k];
+        int bfw = kBFW[(int)b.type], bfd = kBFD[(int)b.type];
+        if (ox + fw <= b.ox || b.ox + bfw <= ox) continue;
+        if (oz + fd <= b.oz || b.oz + bfd <= oz) continue;
+        return true;
+    }
+    return false;
+}
+
+// 左側建物原点 (Java getNextComponentNN 相当)
+static void leftBuildingOrigin(VillDir dir, int sx, int sz, int i,
+                                VillBType t, int& ox, int& oz, int& orient) {
+    int W = kBFW[(int)t], D = kBFD[(int)t];
+    switch (dir) {
+    case VillDir::NORTH:  ox = sx - W;         oz = sz - i;          orient = 1; break;
+    case VillDir::SOUTH:  ox = sx + 1;          oz = sz + i - D + 1;  orient = 3; break;
+    case VillDir::EAST:   ox = sx + i;          oz = sz - D;          orient = 2; break;
+    case VillDir::WEST:   ox = sx - i - W + 1; oz = sz + 1;          orient = 0; break;
+    }
+}
+
+// 右側建物原点 (Java getNextComponentPP 相当)
+static void rightBuildingOrigin(VillDir dir, int sx, int sz, int i,
+                                 VillBType t, int& ox, int& oz, int& orient) {
+    int W = kBFW[(int)t], D = kBFD[(int)t];
+    switch (dir) {
+    case VillDir::NORTH:  ox = sx + 1;          oz = sz - i;          orient = 3; break;
+    case VillDir::SOUTH:  ox = sx - W;          oz = sz + i - D + 1;  orient = 1; break;
+    case VillDir::EAST:   ox = sx + i;          oz = sz + 1;          orient = 0; break;
+    case VillDir::WEST:   ox = sx - i - W + 1; oz = sz - D;          orient = 2; break;
+    }
+}
+
+static VillageLayout buildOrganicVillage(int vx, int vz, uint32_t seed) {
+    VillageLayout lay{};
+    VillRNG rng(hash3(vx, (int)(seed ^ 0xC0FFEE00u), vz));
+
+    VillRoad road_queue[32];
+    int queue_head = 0, queue_tail = 0;
+
+    auto enqueue = [&](int sx, int sz, VillDir dir, int depth) {
+        if (queue_tail >= 32) return;
+        int len = 14 + rng.nextInt(15);
+        road_queue[queue_tail++] = {sx, sz, dir, len, depth};
     };
 
-    // 広場 (7×7)
+    enqueue(vx, vz, VillDir::NORTH, 0);
+    enqueue(vx, vz, VillDir::SOUTH, 0);
+    enqueue(vx, vz, VillDir::EAST,  0);
+    enqueue(vx, vz, VillDir::WEST,  0);
+
+    while (queue_head < queue_tail) {
+        if (lay.n_roads >= 32) break;
+        VillRoad road = road_queue[queue_head++];
+        lay.roads[lay.n_roads++] = road;
+        int road_idx = lay.n_roads - 1;
+
+        bool placed_any = false;
+
+        // 左側建物ループ (Java: rand.nextInt(5) から length-8 まで 2+rand(5) 刻み)
+        for (int i = rng.nextInt(5); i < road.length - 6; ) {
+            VillBType bt = selectBType(rng);  // 衝突時も消費
+            int fw = kBFW[(int)bt], fd = kBFD[(int)bt];
+            int ox, oz, orient;
+            leftBuildingOrigin(road.dir, road.sx, road.sz, i, bt, ox, oz, orient);
+            int cx = ox + fw/2, cz = oz + fd/2;
+            if (std::abs(cx - vx) <= 58 && std::abs(cz - vz) <= 58
+                && !overlapsAny(lay, ox, oz, fw, fd)
+                && lay.n_buildings < 48) {
+                lay.buildings[lay.n_buildings++] = {ox, oz, bt, (int8_t)orient, (int8_t)road_idx};
+                i += std::max(fw, fd) + 2 + rng.nextInt(5);
+                placed_any = true;
+            } else {
+                i += 2 + rng.nextInt(5);
+            }
+        }
+
+        // 右側建物ループ
+        for (int j = rng.nextInt(5); j < road.length - 6; ) {
+            VillBType bt = selectBType(rng);  // 衝突時も消費
+            int fw = kBFW[(int)bt], fd = kBFD[(int)bt];
+            int ox, oz, orient;
+            rightBuildingOrigin(road.dir, road.sx, road.sz, j, bt, ox, oz, orient);
+            int cx = ox + fw/2, cz = oz + fd/2;
+            if (std::abs(cx - vx) <= 58 && std::abs(cz - vz) <= 58
+                && !overlapsAny(lay, ox, oz, fw, fd)
+                && lay.n_buildings < 48) {
+                lay.buildings[lay.n_buildings++] = {ox, oz, bt, (int8_t)orient, (int8_t)road_idx};
+                j += std::max(fw, fd) + 2 + rng.nextInt(5);
+                placed_any = true;
+            } else {
+                j += 2 + rng.nextInt(5);
+            }
+        }
+
+        // 垂直分岐 (Java: placed_any && rand.nextInt(3) > 0、2回独立)
+        if (placed_any && road.depth < 2) {
+            int ex = road.sx, ez = road.sz;
+            switch (road.dir) {
+            case VillDir::NORTH: ez -= road.length; break;
+            case VillDir::SOUTH: ez += road.length; break;
+            case VillDir::EAST:  ex += road.length; break;
+            case VillDir::WEST:  ex -= road.length; break;
+            }
+            if (rng.nextInt(3) > 0) enqueue(ex, ez, perpLeft(road.dir),  road.depth + 1);
+            if (rng.nextInt(3) > 0) enqueue(ex, ez, perpRight(road.dir), road.depth + 1);
+        }
+    }
+
+    return lay;
+}
+
+static void renderVillage(Chunk& chunk, const NoiseGen& noise,
+                           int chunk_wx, int chunk_wz,
+                           const VillageLayout& lay, int vx, int vz) {
+    float temp      = noise.getTemperature((float)vx, (float)vz);
+    float humid     = noise.getHumidity((float)vx, (float)vz);
+    float variation = noise.getVariation((float)vx, (float)vz);
+    float wP, wD, wT, wR, wSw, wM, wC, wSp, wAu;
+    biomeWeights(temp, humid, variation, wP, wD, wT, wR, wSw, wM, wC, wSp, wAu);
+    (void)wP; (void)wD; (void)wR; (void)wSw; (void)wM; (void)wC; (void)wSp; (void)wAu;
+    (void)humid; (void)variation;
+    VillageMat mat = getVillageMat(wT);
+
+    int base_y = computeTerrainHeight(noise, vx, vz);
+
     placePlaza(chunk, chunk_wx, chunk_wz, vx, vz, base_y, 3);
-    placeWell(chunk, chunk_wx, chunk_wz, vx, vz, base_y);
+    placeWell (chunk, chunk_wx, chunk_wz, vx, vz, base_y);
 
-    // 望楼（北東）
-    int tx = vx + 14 + jit(4), tz = vz - 17 + jit(8);
-    int tb = computeFootprintBase(noise, tx, tz, 4, 4);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, tx, tz, 4, 4, tb);
-    placeTower(chunk, chunk_wx, chunk_wz, tx, tz, tb, mat);
-    placePath(chunk, noise, chunk_wx, chunk_wz, tx + 2, tz + 4, vx + 3, vz - 3);
-
-    // 農地（西）
-    int fx = vx - 19 + jit(12), fz = vz - 4 + jit(16);
-    int fb = computeFootprintBase(noise, fx, fz, 6, 8);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, fx, fz, 6, 8, fb);
-    placeFarm(chunk, chunk_wx, chunk_wz, fx, fz, fb);
-
-    // 大型 N棟
-    int nhx = vx - 4 + jit(20), nhz = vz - 10 + jit(24);
-    int nhb = computeFootprintBase(noise, nhx, nhz, 9, 7);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, nhx, nhz, 9, 7, nhb);
-    placeLargeHouse(chunk, chunk_wx, chunk_wz, nhx, nhz, nhb, 2, mat);
-    placePath(chunk, noise, chunk_wx, chunk_wz, nhx + 4, nhz + 7, vx, vz);
-
-    // 大型 S棟
-    int shx = vx - 4 + jit(28), shz = vz + 4 + jit(0);
-    int shb = computeFootprintBase(noise, shx, shz, 9, 7);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, shx, shz, 9, 7, shb);
-    placeLargeHouse(chunk, chunk_wx, chunk_wz, shx, shz, shb, 0, mat);
-    placePath(chunk, noise, chunk_wx, chunk_wz, shx + 4, shz, vx, vz);
-
-    // 中型 E棟
-    int ehx = vx + 4 + jit(4), ehz = vz - 2 + jit(8);
-    int ehb = computeFootprintBase(noise, ehx, ehz, 7, 5);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, ehx, ehz, 7, 5, ehb);
-    placeHouse(chunk, chunk_wx, chunk_wz, ehx, ehz, ehb, 3, mat);
-    placePath(chunk, noise, chunk_wx, chunk_wz, ehx, ehz + 2, vx, vz);
-
-    // 中型 W棟
-    int whx = vx - 11 + jit(12), whz = vz - 2 + jit(16);
-    int whb = computeFootprintBase(noise, whx, whz, 7, 5);
-    levelBuilding(chunk, noise, chunk_wx, chunk_wz, whx, whz, 7, 5, whb);
-    placeHouse(chunk, chunk_wx, chunk_wz, whx, whz, whb, 1, mat);
-    placePath(chunk, noise, chunk_wx, chunk_wz, whx + 7, whz + 2, vx, vz);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Layout B — Compact（密集小村）
-//
-// 小さな広場を囲む4〜5棟の小屋が密集した集落。
-// 農地はなく、全体がコンパクトにまとまる。
-// ─────────────────────────────────────────────────────────────────────────────
-static void layoutCompact(Chunk& chunk, const NoiseGen& noise, uint32_t vh,
-                           int chunk_wx, int chunk_wz,
-                           int vx, int vz, int base_y,
-                           const VillageMat& mat) {
-    auto jit = [&](int shift) -> int {
-        return (int)((vh >> shift) % 3u) - 1;
-    };
-
-    // 小広場（5×5）
-    placePlaza(chunk, chunk_wx, chunk_wz, vx, vz, base_y, 2);
-    placeWell(chunk, chunk_wx, chunk_wz, vx, vz, base_y);
-
-    // 北の小屋
-    {
-        int ox = vx - 2 + jit(4), oz = vz - 9 + jit(8);
-        int b = computeFootprintBase(noise, ox, oz, 5, 4);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 5, 4, b);
-        placeSmallHut(chunk, chunk_wx, chunk_wz, ox, oz, b, 2, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox + 2, oz + 4, vx, vz - 2);
-    }
-    // 南の小屋
-    {
-        int ox = vx - 2 + jit(12), oz = vz + 6 + jit(16);
-        int b = computeFootprintBase(noise, ox, oz, 5, 4);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 5, 4, b);
-        placeSmallHut(chunk, chunk_wx, chunk_wz, ox, oz, b, 0, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox + 2, oz, vx, vz + 2);
-    }
-    // 東の中型家
-    {
-        int ox = vx + 4 + jit(20), oz = vz - 2 + jit(24);
-        int b = computeFootprintBase(noise, ox, oz, 7, 5);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 7, 5, b);
-        placeHouse(chunk, chunk_wx, chunk_wz, ox, oz, b, 3, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox, oz + 2, vx + 2, vz);
-    }
-    // 西の小屋
-    {
-        int ox = vx - 10 + jit(28), oz = vz - 2 + jit(0);
-        int b = computeFootprintBase(noise, ox, oz, 5, 4);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 5, 4, b);
-        placeSmallHut(chunk, chunk_wx, chunk_wz, ox, oz, b, 1, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox + 5, oz + 2, vx - 2, vz);
-    }
-    // 北東の望楼（一部の村のみ）
-    if ((vh & 0x3u) >= 1u) {
-        int ox = vx + 9 + jit(4), oz = vz - 12 + jit(8);
-        int b = computeFootprintBase(noise, ox, oz, 4, 4);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 4, 4, b);
-        placeTower(chunk, chunk_wx, chunk_wz, ox, oz, b, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox + 2, oz + 4, vx + 2, vz - 2);
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Layout C — Street（街道沿い）
-//
-// 南北に伸びるメイン街道の両側に家が並ぶ宿場町風の村。
-// 街道中央に井戸、北端にオプションで望楼を配置。
-// ─────────────────────────────────────────────────────────────────────────────
-static void layoutStreet(Chunk& chunk, const NoiseGen& noise, uint32_t vh,
-                          int chunk_wx, int chunk_wz,
-                          int vx, int vz, int base_y,
-                          const VillageMat& mat) {
-    auto jit = [&](int shift) -> int {
-        return (int)((vh >> shift) % 3u) - 1;
-    };
-
-    // 中央の井戸と広場（小さめ、3×3）
-    placePlaza(chunk, chunk_wx, chunk_wz, vx, vz, base_y, 2);
-    placeWell(chunk, chunk_wx, chunk_wz, vx, vz, base_y);
-
-    // 南北メイン街道（3ブロック幅の石畳）
-    for (int dz = -18; dz <= 18; ++dz) {
-        for (int dx = -1; dx <= 1; ++dx) {
-            int y = computeTerrainHeight(noise, vx + dx, vz + dz);
-            setBlockWorld(chunk, chunk_wx, chunk_wz, vx + dx, y, vz + dz, BlockType::Stone);
+    // 道路
+    for (int ri = 0; ri < lay.n_roads; ++ri) {
+        const VillRoad& r = lay.roads[ri];
+        int ex = r.sx, ez = r.sz;
+        switch (r.dir) {
+        case VillDir::NORTH: ez -= r.length; break;
+        case VillDir::SOUTH: ez += r.length; break;
+        case VillDir::EAST:  ex += r.length; break;
+        case VillDir::WEST:  ex -= r.length; break;
         }
+        placePath(chunk, noise, chunk_wx, chunk_wz, r.sx, r.sz, ex, ez);
     }
 
-    // 西側の建物（街道の西に3棟）
-    static const int west_dz[3]   = {-12, -2, 8};
-    static const int west_orient[3] = {1, 1, 1};  // 東向き（街道側にドア）
-    for (int i = 0; i < 3; ++i) {
-        int ox = vx - 10 + jit(i * 8);
-        int oz = vz + west_dz[i] + jit(i * 8 + 4);
-        bool large = (i == 1);
-        if (large) {
-            int b = computeFootprintBase(noise, ox, oz, 9, 7);
-            levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 9, 7, b);
-            placeLargeHouse(chunk, chunk_wx, chunk_wz, ox, oz, b, west_orient[i], mat);
-            placePath(chunk, noise, chunk_wx, chunk_wz, ox + 9, oz + 3, vx - 1, vz + west_dz[i] + 3);
-        } else {
-            int b = computeFootprintBase(noise, ox, oz, 7, 5);
-            levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 7, 5, b);
-            placeHouse(chunk, chunk_wx, chunk_wz, ox, oz, b, west_orient[i], mat);
-            placePath(chunk, noise, chunk_wx, chunk_wz, ox + 7, oz + 2, vx - 1, vz + west_dz[i] + 2);
+    // 建物
+    for (int bi = 0; bi < lay.n_buildings; ++bi) {
+        const VillBuilding& b = lay.buildings[bi];
+        int fw = kBFW[(int)b.type], fd = kBFD[(int)b.type];
+
+        if (b.ox + fw <= chunk_wx || b.ox >= chunk_wx + CHUNK_SIZE_X) continue;
+        if (b.oz + fd <= chunk_wz || b.oz >= chunk_wz + CHUNK_SIZE_Z) continue;
+
+        int bb = computeFootprintBase(noise, b.ox, b.oz, fw, fd);
+        levelBuilding(chunk, noise, chunk_wx, chunk_wz, b.ox, b.oz, fw, fd, bb);
+
+        // ドア位置から親道路中点へパス接続
+        int door_wx, door_wz;
+        switch (b.orient) {
+        case 0:  door_wx = b.ox + fw/2;   door_wz = b.oz;          break;
+        case 1:  door_wx = b.ox + fw - 1; door_wz = b.oz + fd/2;   break;
+        case 2:  door_wx = b.ox + fw/2;   door_wz = b.oz + fd - 1; break;
+        default: door_wx = b.ox;          door_wz = b.oz + fd/2;   break;
         }
-    }
-
-    // 東側の建物（街道の東に3棟）
-    static const int east_dz[3]   = {-10, 0, 9};
-    static const int east_orient[3] = {3, 3, 3};  // 西向き（街道側にドア）
-    for (int i = 0; i < 3; ++i) {
-        int ox = vx + 4 + jit(i * 8 + 2);
-        int oz = vz + east_dz[i] + jit(i * 8 + 6);
-        bool small = (i == 2);
-        if (small) {
-            int b = computeFootprintBase(noise, ox, oz, 5, 4);
-            levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 5, 4, b);
-            placeSmallHut(chunk, chunk_wx, chunk_wz, ox, oz, b, east_orient[i], mat);
-            placePath(chunk, noise, chunk_wx, chunk_wz, ox, oz + 2, vx + 1, vz + east_dz[i] + 2);
-        } else {
-            int b = computeFootprintBase(noise, ox, oz, 7, 5);
-            levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 7, 5, b);
-            placeHouse(chunk, chunk_wx, chunk_wz, ox, oz, b, east_orient[i], mat);
-            placePath(chunk, noise, chunk_wx, chunk_wz, ox, oz + 2, vx + 1, vz + east_dz[i] + 2);
+        if (b.road_idx >= 0 && b.road_idx < lay.n_roads) {
+            const VillRoad& r = lay.roads[(int)b.road_idx];
+            int mx = r.sx, mz = r.sz;
+            int half = r.length / 2;
+            switch (r.dir) {
+            case VillDir::NORTH: mz -= half; break;
+            case VillDir::SOUTH: mz += half; break;
+            case VillDir::EAST:  mx += half; break;
+            case VillDir::WEST:  mx -= half; break;
+            }
+            placePath(chunk, noise, chunk_wx, chunk_wz, door_wx, door_wz, mx, mz);
         }
-    }
 
-    // 農地（南端）
-    {
-        int ox = vx - 3 + jit(20), oz = vz + 13 + jit(24);
-        int b = computeFootprintBase(noise, ox, oz, 6, 8);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 6, 8, b);
-        placeFarm(chunk, chunk_wx, chunk_wz, ox, oz, b);
-    }
-
-    // 北端の望楼（オプション）
-    if ((vh & 0x3u) >= 1u) {
-        int ox = vx - 2 + jit(28), oz = vz - 18 + jit(0);
-        int b = computeFootprintBase(noise, ox, oz, 4, 4);
-        levelBuilding(chunk, noise, chunk_wx, chunk_wz, ox, oz, 4, 4, b);
-        placeTower(chunk, chunk_wx, chunk_wz, ox, oz, b, mat);
-        placePath(chunk, noise, chunk_wx, chunk_wz, ox + 2, oz + 4, vx, vz - 2);
+        switch (b.type) {
+        case VillBType::SmallHut:
+            placeSmallHut  (chunk, chunk_wx, chunk_wz, b.ox, b.oz, bb, b.orient, mat); break;
+        case VillBType::House:
+            placeHouse     (chunk, chunk_wx, chunk_wz, b.ox, b.oz, bb, b.orient, mat); break;
+        case VillBType::LargeHouse:
+            placeLargeHouse(chunk, chunk_wx, chunk_wz, b.ox, b.oz, bb, b.orient, mat); break;
+        case VillBType::Tower:
+            placeTower     (chunk, chunk_wx, chunk_wz, b.ox, b.oz, bb, mat); break;
+        case VillBType::Farm:
+            placeFarm      (chunk, chunk_wx, chunk_wz, b.ox, b.oz, bb); break;
+        }
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // placeVillage() — 村全体を配置するマスター関数
-//
-// ハッシュでレイアウトを選択：
-//   hash % 3 == 0: Classic（広場中心型）
-//   hash % 3 == 1: Compact（密集小村）
-//   hash % 3 == 2: Street（街道沿い）
 // ─────────────────────────────────────────────────────────────────────────────
 static void placeVillage(Chunk& chunk, const NoiseGen& noise, uint32_t seed,
                           int chunk_wx, int chunk_wz) {
-    constexpr int MAX_REACH = 45;
+    constexpr int MAX_REACH = 60;
 
     int min_cx = (int)std::floor((float)(chunk_wx - MAX_REACH) / VILLAGE_GRID);
     int max_cx = (int)std::floor((float)(chunk_wx + CHUNK_SIZE_X + MAX_REACH) / VILLAGE_GRID);
@@ -1216,27 +1278,8 @@ static void placeVillage(Chunk& chunk, const NoiseGen& noise, uint32_t seed,
             if (!getVillageCenter(gcx, gcz, seed, vx, vz)) continue;
             if (!isVillageSuitable(noise, seed, vx, vz))   continue;
 
-            int base_y = computeTerrainHeight(noise, vx, vz);
-
-            // バイオーム素材を決定
-            float temp      = noise.getTemperature((float)vx, (float)vz);
-            float humid     = noise.getHumidity((float)vx, (float)vz);
-            float variation = noise.getVariation((float)vx, (float)vz);
-            float wP, wD, wT, wR, wSw, wM, wC, wSp, wAu;
-            biomeWeights(temp, humid, variation, wP, wD, wT, wR, wSw, wM, wC, wSp, wAu);
-            (void)wP; (void)wD; (void)wR; (void)wSw; (void)wM; (void)wC; (void)wSp; (void)wAu;
-            VillageMat mat = getVillageMat(wT);
-
-            // レイアウトをハッシュで選択
-            uint32_t vh = hash3(vx, (int)(seed ^ 0xBEEFCAFEu), vz);
-            int layout = (int)(vh % 3u);
-
-            if (layout == 0)
-                layoutClassic(chunk, noise, vh, chunk_wx, chunk_wz, vx, vz, base_y, mat);
-            else if (layout == 1)
-                layoutCompact(chunk, noise, vh, chunk_wx, chunk_wz, vx, vz, base_y, mat);
-            else
-                layoutStreet(chunk, noise, vh, chunk_wx, chunk_wz, vx, vz, base_y, mat);
+            VillageLayout lay = buildOrganicVillage(vx, vz, seed);
+            renderVillage(chunk, noise, chunk_wx, chunk_wz, lay, vx, vz);
         }
     }
 }
