@@ -2665,17 +2665,23 @@ void Renderer::drawArrows(const std::vector<Arrow>& arrows,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// drawDragon() — エンダードラゴンを多パーツで描画する
+// drawDragon() — エンダードラゴンを本家 (DragonModel) 準拠の多パーツで描画する
 //
-// 構成: 頭・首・胴・尾(3)・翼(2)・脚(4) の計 11 パーツ。
-// すべて単位立方体ボックスを translate/rotate/scale で配置する。
+// 構成 (本家のパーツ分割に対応):
+//   ・頭     : 頭蓋 + 鼻先 + 顎 (開閉) + 鼻孔×2 + 角×2 + 紫眼×2
+//   ・首     : 5 セグメントのチェーン (各セグメントに背びれ)
+//   ・胴     : 1 箱 + 背びれ×3
+//   ・翼     : 左右とも「骨 (前縁) + 膜」×2 関節 (内翼 + 翼端)。
+//              翼端は内翼より遅れた位相・大きい振幅で羽ばたく。
+//   ・尾     : 12 セグメントのチェーン (進行波でうねる。各セグメントに背びれ)
+//   ・脚     : 前脚×2 (腿+脛+足)、後脚×2 (前脚より大型)。飛行中は折りたたみ。
 //
 // 座標系:
 //   ・ドラゴンの「胴体中心」がワールド座標 (x,y,z)。
 //   ・モデルローカルでは +X が前方 (頭側)、-X が後方 (尾側)、
 //     ±Z が左右の翼、+Y が上面。
-//   ・yaw=0 で +X 方向。Camera と同じ慣習なので yaw-90° で +Z 向きの
-//     デフォルトモデルを回転させる。
+//   ・ローカル 1.0 = 本家モデル 20px。kModelScale=2.0 でワールド 2 ブロック。
+//   ・寸法は本家 DragonModel の px 比 (胴 64×24×24、首/尾 10³、翼骨 56 等)。
 // ─────────────────────────────────────────────────────────────────────────────
 void Renderer::drawDragon(const EnderDragon& d,
                            const float* view4x4, const float* proj4x4) {
@@ -2695,20 +2701,24 @@ void Renderer::drawDragon(const EnderDragon& d,
     glBindVertexArray(entity_vao_);
     glDisable(GL_CULL_FACE);
 
-    // パレット: エンダードラゴンの黒紫。被弾フラッシュ中は赤寄せ。
+    // パレット: ほぼ黒の体 + やや明るい灰の翼膜。被弾フラッシュ中は赤寄せ。
     const float flash = (d.hit_flash_timer > 0.0f)
                           ? std::min(d.hit_flash_timer / 0.15f, 1.0f) : 0.0f;
-    const float kBody[] = {
-        0.10f * (1.0f - flash) + 0.95f * flash,
-        0.06f * (1.0f - flash) + 0.10f * flash,
-        0.14f * (1.0f - flash) + 0.10f * flash,
+    auto mixFlash = [flash](float r, float g, float b,
+                             float fr, float fg, float fb,
+                             float* out) {
+        out[0] = r * (1.0f - flash) + fr * flash;
+        out[1] = g * (1.0f - flash) + fg * flash;
+        out[2] = b * (1.0f - flash) + fb * flash;
     };
-    const float kDark[] = {
-        0.03f * (1.0f - flash) + 0.70f * flash,
-        0.02f * (1.0f - flash) + 0.05f * flash,
-        0.05f * (1.0f - flash) + 0.05f * flash,
-    };
-    static const float kEye[]  = {0.80f, 0.20f, 0.85f};   // 紫眼 (フラッシュ無関係)
+    float kBody[3], kDark[3], kWing[3], kHorn[3];
+    mixFlash(0.085f, 0.075f, 0.105f, 0.95f, 0.10f, 0.10f, kBody);  // 体・首・尾
+    mixFlash(0.045f, 0.040f, 0.055f, 0.70f, 0.06f, 0.06f, kDark);  // 骨・脚・びれ
+    mixFlash(0.165f, 0.150f, 0.195f, 0.85f, 0.12f, 0.12f, kWing);  // 翼膜
+    mixFlash(0.330f, 0.315f, 0.355f, 0.90f, 0.30f, 0.30f, kHorn);  // 角
+    static const float kEye[]  = {0.85f, 0.25f, 0.95f};   // 紫眼 (フラッシュ無関係)
+
+    const bool dying = (d.state == EnderDragon::State::Dying);
 
     // 全体変換: 胴体中心に移動 → yaw → pitch → 全体スケール
     // yaw=0 → +X 向き。デフォルトモデルも +X 前なので回転は yaw のまま。
@@ -2719,88 +2729,297 @@ void Renderer::drawDragon(const EnderDragon& d,
     global = glm::rotate(global, glm::radians(d.pitch), glm::vec3(0.f, 0.f, 1.f));
     global = glm::scale(global, glm::vec3(kModelScale));
 
-    // ── 胴体 (Body): +X 前方に伸ばした楕円体的な箱 ─────────────────────
+    // ── 胴体 (Body): 本家 64×24×24px ─────────────────────────────────────
     {
-        glm::vec3 sz(3.5f, 1.4f, 1.8f);
-        glm::mat4 m = glm::translate(global, glm::vec3(0.0f, 0.0f, 0.0f));
-        m = glm::scale(m, sz);
+        glm::mat4 m = glm::scale(global, glm::vec3(3.2f, 1.2f, 1.2f));
         drawStevePart(vp * m, m, kBody);
     }
-
-    // ── 首 (Neck): 胴体前から斜めに前上方へ ───────────────────────────
-    {
-        glm::vec3 sz(1.6f, 0.9f, 0.9f);
-        glm::mat4 m = glm::translate(global, glm::vec3(2.3f, 0.45f, 0.0f));
-        m = glm::rotate(m, glm::radians(-12.0f), glm::vec3(0.f, 0.f, 1.f));
-        m = glm::scale(m, sz);
-        drawStevePart(vp * m, m, kBody);
-    }
-
-    // ── 頭 (Head): 首の先端 ──────────────────────────────────────────
-    {
-        glm::vec3 sz(1.8f, 1.2f, 1.4f);
-        glm::mat4 m = glm::translate(global, glm::vec3(3.4f, 0.9f, 0.0f));
-        m = glm::scale(m, sz);
-        drawStevePart(vp * m, m, kBody);
-    }
-
-    // ── 目 (左右): 頭の側面に紫色の小箱 ────────────────────────────────
-    for (int side = 0; side < 2; ++side) {
-        const float zs = (side == 0) ? 0.71f : -0.71f;
-        glm::vec3 sz(0.30f, 0.20f, 0.05f);
-        glm::mat4 m = glm::translate(global, glm::vec3(3.7f, 1.10f, zs));
-        m = glm::scale(m, sz);
-        drawStevePart(vp * m, m, kEye);
-    }
-
-    // ── 翼 (左右): 胴体上面から左右に伸ばす平板。
-    //    羽ばたきは flap_angle で Z 軸回転 (前縁を基準にバタつかせる)。
-    const float flap = std::sin(d.wing_phase) * 0.45f;  // ±25° 程度
-    for (int side = 0; side < 2; ++side) {
-        const float zs    = (side == 0) ? 1.0f : -1.0f;
-        const float angle = flap * zs;  // 左右対称に羽ばたく
-
-        // 翼の根本ピボット (胴体側面上)
-        glm::mat4 m = glm::translate(global, glm::vec3(0.0f, 0.6f, 0.9f * zs));
-        m = glm::rotate(m, angle, glm::vec3(1.f, 0.f, 0.f));
-        // 翼本体を root から +Z (zs 方向) に伸ばす
-        m = glm::translate(m, glm::vec3(0.0f, 0.0f, 1.6f * zs));
-        m = glm::scale(m, glm::vec3(2.6f, 0.15f, 3.2f));
+    // 背びれ×3: 本家の背中の scale パーツ
+    for (int i = 0; i < 3; ++i) {
+        const float sx[3] = {0.9f, 0.1f, -0.7f};
+        glm::mat4 m = glm::translate(global, glm::vec3(sx[i], 0.75f, 0.0f));
+        m = glm::scale(m, glm::vec3(0.50f, 0.35f, 0.10f));
         drawStevePart(vp * m, m, kDark);
     }
 
-    // ── 尾 (3 セグメント): 後方に向かって徐々に細くなる
-    //    隣接セグメント間で連結する S 字波動。
+    // ── 首 (Neck): 5 セグメントのチェーンを前上方へ弧状に伸ばす ──────────
+    //    位置はチェーン積分で決める (wing_phase 由来の揺れのみなので
+    //    ネット同期クライアントでも決定的)。
+    glm::vec3 neck_p(1.55f, 0.30f, 0.0f);  // 胴体前端の付け根
+    float head_pitch = 0.0f;
     {
-        const float kSegLen[3]    = {1.6f, 1.4f, 1.2f};
-        const float kSegThick[3]  = {1.0f, 0.7f, 0.45f};
-        const float kSegHeight[3] = {0.9f, 0.65f, 0.4f};
-        float prev_x = -1.75f;   // 胴体後端から開始
-        float prev_y = -0.05f;
-        const float wave = std::sin(d.wing_phase * 0.7f);
-        for (int i = 0; i < 3; ++i) {
-            const float yaw_off = wave * 0.10f * (i + 1);  // 後ろほど大きく波打つ
-            const float seg_yaw = std::sin(d.wing_phase * 0.7f + i * 0.6f) * 0.15f;
-            const float cx = prev_x - kSegLen[i] * 0.5f;
-            const float cy = prev_y - 0.05f * (i + 1);
-            glm::mat4 m = glm::translate(global, glm::vec3(cx, cy, 0.0f));
-            m = glm::rotate(m, seg_yaw + yaw_off, glm::vec3(0.f, 1.f, 0.f));
-            m = glm::scale(m, glm::vec3(kSegLen[i], kSegHeight[i], kSegThick[i]));
-            drawStevePart(vp * m, m, kBody);
-            prev_x = cx - kSegLen[i] * 0.5f;
-            prev_y = cy;
+        // 付け根→頭にかけて持ち上がり、先端で水平に戻る弧
+        static const float kNeckPitch[5] = {0.30f, 0.45f, 0.50f, 0.38f, 0.20f};
+        for (int i = 0; i < 5; ++i) {
+            float pitch = kNeckPitch[i]
+                        + std::sin(d.wing_phase * 0.6f + i * 0.5f) * 0.05f;
+            if (dying) pitch += 0.30f;  // 断末魔: 首を大きく反らす
+            const glm::vec3 dir(std::cos(pitch), std::sin(pitch), 0.0f);
+            const glm::vec3 c = neck_p + dir * 0.21f;
+
+            glm::mat4 base = glm::translate(global, c);
+            base = glm::rotate(base, pitch, glm::vec3(0.f, 0.f, 1.f));
+            glm::mat4 seg = glm::scale(base, glm::vec3(0.5f));
+            drawStevePart(vp * seg, seg, kBody);
+            // 首背びれ
+            glm::mat4 fin = glm::translate(base, glm::vec3(0.0f, 0.33f, 0.0f));
+            fin = glm::scale(fin, glm::vec3(0.30f, 0.22f, 0.08f));
+            drawStevePart(vp * fin, fin, kDark);
+
+            neck_p += dir * 0.42f;
+            head_pitch = pitch;
         }
     }
 
-    // ── 脚 (4): 胴体下面の四隅から小さく垂れ下がる
+    // ── 頭 (Head): 首の先端。頭蓋+鼻先+顎+鼻孔+角+目 ──────────────────────
     {
-        const float lx[4] = { 1.2f,  1.2f, -1.0f, -1.0f};
-        const float lz[4] = { 0.7f, -0.7f,  0.7f, -0.7f};
-        const glm::vec3 leg_sz(0.45f, 0.85f, 0.45f);
-        for (int i = 0; i < 4; ++i) {
-            glm::mat4 m = glm::translate(global, glm::vec3(lx[i], -1.10f, lz[i]));
-            m = glm::scale(m, leg_sz);
+        // 顎の開き: 普段は時々ゆっくり開閉、被弾時と死亡演出では大きく開く
+        float jaw_open = 0.08f
+            + 0.35f * std::max(0.0f, std::sin(d.life_timer * 0.5f) - 0.55f) / 0.45f;
+        jaw_open = std::max(jaw_open, flash * 0.55f);
+        if (dying) jaw_open = 0.65f;
+
+        head_pitch *= 0.35f;  // 頭は前方へ向き直す
+        glm::mat4 mh = glm::translate(
+            global, neck_p + glm::vec3(std::cos(head_pitch), std::sin(head_pitch), 0.f) * 0.35f);
+        mh = glm::rotate(mh, head_pitch, glm::vec3(0.f, 0.f, 1.f));
+
+        // 頭蓋 (本家 16³px)
+        {
+            glm::mat4 m = glm::translate(mh, glm::vec3(0.05f, 0.08f, 0.0f));
+            m = glm::scale(m, glm::vec3(0.8f));
+            drawStevePart(vp * m, m, kBody);
+        }
+        // 鼻先 (本家 upperlip 12×5×16px)
+        {
+            glm::mat4 m = glm::translate(mh, glm::vec3(0.70f, 0.02f, 0.0f));
+            m = glm::scale(m, glm::vec3(0.70f, 0.26f, 0.50f));
+            drawStevePart(vp * m, m, kBody);
+        }
+        // 鼻孔×2 (鼻先上面)
+        for (int side = 0; side < 2; ++side) {
+            const float zs = (side == 0) ? 0.15f : -0.15f;
+            glm::mat4 m = glm::translate(mh, glm::vec3(0.92f, 0.18f, zs));
+            m = glm::scale(m, glm::vec3(0.12f, 0.08f, 0.10f));
             drawStevePart(vp * m, m, kDark);
+        }
+        // 顎 (本家 jaw 12×4×16px): 後端ピボットで下方に開く
+        {
+            glm::mat4 mj = glm::translate(mh, glm::vec3(0.32f, -0.22f, 0.0f));
+            mj = glm::rotate(mj, -jaw_open, glm::vec3(0.f, 0.f, 1.f));
+            glm::mat4 m = glm::translate(mj, glm::vec3(0.36f, -0.08f, 0.0f));
+            m = glm::scale(m, glm::vec3(0.72f, 0.16f, 0.46f));
+            drawStevePart(vp * m, m, kBody);
+        }
+        // 角×2: 頭蓋上面後方から上後方へ
+        for (int side = 0; side < 2; ++side) {
+            const float zs = (side == 0) ? 0.24f : -0.24f;
+            glm::mat4 m = glm::translate(mh, glm::vec3(-0.12f, 0.44f, zs));
+            m = glm::rotate(m, 0.55f, glm::vec3(0.f, 0.f, 1.f));  // 上端を後ろへ
+            m = glm::translate(m, glm::vec3(0.0f, 0.26f, 0.0f));
+            m = glm::scale(m, glm::vec3(0.12f, 0.55f, 0.12f));
+            drawStevePart(vp * m, m, kHorn);
+        }
+        // 目×2: 頭蓋側面の紫の発光部
+        for (int side = 0; side < 2; ++side) {
+            const float zs = (side == 0) ? 0.41f : -0.41f;
+            glm::mat4 m = glm::translate(mh, glm::vec3(0.20f, 0.16f, zs));
+            m = glm::scale(m, glm::vec3(0.26f, 0.12f, 0.05f));
+            drawStevePart(vp * m, m, kEye);
+        }
+    }
+
+    // ── 翼 (左右): 骨 (前縁) + 膜の 2 関節。翼端は遅延位相で羽ばたく ──────
+    //    本家比: 内翼骨 56×8×8px、翼端骨 56×4×4px、膜 56×0×56px。
+    {
+        const float flap     = std::sin(d.wing_phase);
+        const float flap_tip = std::sin(d.wing_phase - 0.7f);  // 翼端は遅れる
+        for (int side = 0; side < 2; ++side) {
+            const float zs = (side == 0) ? 1.0f : -1.0f;
+            // 上げ基調 (滑空姿勢) で ±30° 程度はためく
+            const float root_ang = -(0.12f + 0.50f * flap) * zs;
+            const float tip_ang  = -(0.18f + 0.55f * flap_tip) * zs;
+
+            // 肩ピボット (胴体上面前方)
+            glm::mat4 sh = glm::translate(global, glm::vec3(0.55f, 0.45f, 0.55f * zs));
+            sh = glm::rotate(sh, root_ang, glm::vec3(1.f, 0.f, 0.f));
+
+            // 内翼: 骨 (前縁)
+            {
+                glm::mat4 m = glm::translate(sh, glm::vec3(0.0f, 0.0f, 1.4f * zs));
+                m = glm::scale(m, glm::vec3(0.40f, 0.40f, 2.8f));
+                drawStevePart(vp * m, m, kDark);
+            }
+            // 内翼: 膜 (骨から後方に張る)
+            {
+                glm::mat4 m = glm::translate(sh, glm::vec3(-1.35f, 0.0f, 1.4f * zs));
+                m = glm::scale(m, glm::vec3(2.7f, 0.06f, 2.8f));
+                drawStevePart(vp * m, m, kWing);
+            }
+            // 翼端ピボット (内翼の先端)
+            glm::mat4 tp = glm::translate(sh, glm::vec3(0.0f, 0.0f, 2.8f * zs));
+            tp = glm::rotate(tp, tip_ang, glm::vec3(1.f, 0.f, 0.f));
+            // 翼端: 骨
+            {
+                glm::mat4 m = glm::translate(tp, glm::vec3(0.0f, 0.0f, 1.35f * zs));
+                m = glm::scale(m, glm::vec3(0.28f, 0.28f, 2.7f));
+                drawStevePart(vp * m, m, kDark);
+            }
+            // 翼端: 膜
+            {
+                glm::mat4 m = glm::translate(tp, glm::vec3(-1.10f, 0.0f, 1.35f * zs));
+                m = glm::scale(m, glm::vec3(2.2f, 0.05f, 2.7f));
+                drawStevePart(vp * m, m, kWing);
+            }
+        }
+    }
+
+    // ── 尾 (12 セグメント): 本家と同数。進行波で左右上下にうねる ─────────
+    {
+        glm::vec3 tail_p(-1.65f, 0.10f, 0.0f);  // 胴体後端の付け根
+        for (int i = 0; i < 12; ++i) {
+            // 付け根→先端へ伝わる進行波 (横) + ゆっくりした上下動
+            const float lat  = std::sin(d.wing_phase * 0.8f  - i * 0.45f) * 0.22f;
+            const float vert = -0.10f + std::sin(d.wing_phase * 0.53f - i * 0.30f) * 0.06f;
+            const glm::vec3 dir = glm::normalize(glm::vec3(-1.0f, vert, lat));
+            const glm::vec3 c = tail_p + dir * 0.20f;
+            const float seg_yaw = std::atan2(lat, 1.0f);
+            const float taper   = 1.0f - 0.035f * static_cast<float>(i);  // 緩い先細り
+
+            glm::mat4 base = glm::translate(global, c);
+            base = glm::rotate(base, seg_yaw, glm::vec3(0.f, 1.f, 0.f));
+            glm::mat4 seg = glm::scale(base, glm::vec3(0.5f * taper));
+            drawStevePart(vp * seg, seg, kBody);
+            // 尾背びれ
+            glm::mat4 fin = glm::translate(base, glm::vec3(0.0f, 0.32f * taper, 0.0f));
+            fin = glm::scale(fin, glm::vec3(0.28f, 0.20f, 0.08f) * taper);
+            drawStevePart(vp * fin, fin, kDark);
+
+            tail_p += dir * 0.40f;
+        }
+    }
+
+    // ── 脚 (4): 腿+脛+足の 3 関節。飛行中は折りたたんで体に引きつける ──────
+    //    本家比: 前脚 腿8×24×8px、後脚 腿16×32×16px (後脚が大型)。
+    {
+        auto drawLeg = [&](const glm::vec3& hip,
+                            float tw, float tlen,      // 腿の太さ・長さ
+                            float sw, float slen,      // 脛の太さ・長さ
+                            const glm::vec3& foot_sz,
+                            float thigh_ang, float shin_ang) {
+            glm::mat4 h = glm::translate(global, hip);
+            h = glm::rotate(h, thigh_ang, glm::vec3(0.f, 0.f, 1.f));
+            glm::mat4 thigh = glm::translate(h, glm::vec3(0.0f, -tlen * 0.5f, 0.0f));
+            thigh = glm::scale(thigh, glm::vec3(tw, tlen, tw));
+            drawStevePart(vp * thigh, thigh, kDark);
+
+            glm::mat4 k = glm::translate(h, glm::vec3(0.0f, -tlen, 0.0f));
+            k = glm::rotate(k, shin_ang, glm::vec3(0.f, 0.f, 1.f));
+            glm::mat4 shin = glm::translate(k, glm::vec3(0.0f, -slen * 0.5f, 0.0f));
+            shin = glm::scale(shin, glm::vec3(sw, slen, sw));
+            drawStevePart(vp * shin, shin, kDark);
+
+            // 足: 足裏が水平になるよう関節分を打ち消し、爪先を前へ
+            glm::mat4 f = glm::translate(
+                k, glm::vec3(foot_sz.x * 0.25f, -slen - foot_sz.y * 0.4f, 0.0f));
+            f = glm::rotate(f, -(thigh_ang + shin_ang), glm::vec3(0.f, 0.f, 1.f));
+            f = glm::scale(f, foot_sz);
+            drawStevePart(vp * f, f, kDark);
+        };
+
+        const float sway = std::sin(d.wing_phase) * 0.06f;  // 羽ばたきに同期した揺れ
+        for (int side = 0; side < 2; ++side) {
+            const float zs = (side == 0) ? 1.0f : -1.0f;
+            // 前脚 (小)
+            drawLeg(glm::vec3(0.85f, -0.50f, 0.62f * zs),
+                    0.38f, 1.00f, 0.28f, 0.90f,
+                    glm::vec3(0.65f, 0.18f, 0.40f),
+                    -0.50f + sway, 1.05f);
+            // 後脚 (大)
+            drawLeg(glm::vec3(-0.65f, -0.45f, 0.72f * zs),
+                    0.70f, 1.30f, 0.50f, 1.20f,
+                    glm::vec3(1.00f, 0.28f, 0.60f),
+                    -0.85f + sway, 1.35f);
+        }
+    }
+
+    glEnable(GL_CULL_FACE);
+    glBindVertexArray(0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// drawDragonEffects() — ファイアボールとブレス雲を描画する
+//
+// ファイアボール: 明るい紫の核 + 暗い外殻を互い違いに回転させた 2 重キューブ。
+// ブレス雲     : 着弾点の周囲を漂う小さな紫パーティクル群。インデックスから
+//                疑似乱数で配置し、残り時間でゆっくり旋回・終盤は縮んで消える。
+// ─────────────────────────────────────────────────────────────────────────────
+void Renderer::drawDragonEffects(const std::vector<DragonFireball>& fireballs,
+                                  const std::vector<DragonBreathCloud>& clouds,
+                                  const float* view4x4, const float* proj4x4) {
+    if (!entity_vao_) return;
+    if (fireballs.empty() && clouds.empty()) return;
+
+    const glm::mat4 view = glm::make_mat4(view4x4);
+    const glm::mat4 proj = glm::make_mat4(proj4x4);
+    const glm::mat4 vp   = proj * view;
+
+    entity_shader_.use();
+    entity_shader_.setVec3("uSunDir", sun_dir_[0], sun_dir_[1], sun_dir_[2]);
+    entity_shader_.setFloat("uAmbient",     ambient_);
+    entity_shader_.setFloat("uSunStrength", sun_strength_);
+    entity_shader_.setMat4("uView", view4x4);
+    setFogUniforms(entity_shader_, sky_horizon_, underwater_);
+
+    glBindVertexArray(entity_vao_);
+    glDisable(GL_CULL_FACE);
+
+    static const float kCore[]  = {0.90f, 0.35f, 1.00f};  // 明るい紫の核
+    static const float kShell[] = {0.35f, 0.08f, 0.45f};  // 暗紫の外殻
+    static const float kBreath[] = {0.55f, 0.15f, 0.75f}; // ブレス雲
+
+    // ── ファイアボール ──────────────────────────────────────────────────────
+    for (const DragonFireball& fb : fireballs) {
+        // 残り寿命を回転位相に流用 (発射時刻から単調なので見た目は連続)
+        const float spin = fb.life * 4.0f;
+        glm::mat4 base = glm::translate(glm::mat4(1.0f),
+                                         glm::vec3(fb.x, fb.y, fb.z));
+        // 核
+        glm::mat4 core = glm::rotate(base, spin, glm::vec3(0.3f, 1.0f, 0.2f));
+        core = glm::scale(core, glm::vec3(0.9f));
+        drawStevePart(vp * core, core, kCore);
+        // 外殻 (逆回転)
+        glm::mat4 shell = glm::rotate(base, -spin * 0.7f,
+                                       glm::vec3(0.7f, 0.4f, 0.6f));
+        shell = glm::scale(shell, glm::vec3(1.25f));
+        drawStevePart(vp * shell, shell, kShell);
+    }
+
+    // ── ブレス雲 ────────────────────────────────────────────────────────────
+    for (const DragonBreathCloud& cl : clouds) {
+        const float age  = DRAGON_CLOUD_DURATION - cl.timer;
+        // 終盤 1 秒で縮んで消える
+        const float fade = std::min(cl.timer, 1.0f);
+        constexpr int kParticles = 14;
+        for (int i = 0; i < kParticles; ++i) {
+            // インデックスから疑似乱数 (全クライアントで同一の見た目になる)
+            const float h1 = std::sin((float)i * 12.9898f) * 43758.5453f;
+            const float h2 = std::sin((float)i * 78.2330f) * 12345.6789f;
+            const float r01a = h1 - std::floor(h1);
+            const float r01b = h2 - std::floor(h2);
+
+            const float radius = (0.4f + r01a * 0.6f) * DRAGON_CLOUD_RADIUS;
+            const float ang    = r01b * 6.2831853f + age * (0.4f + r01a * 0.5f);
+            const float bob    = std::sin(age * 2.0f + (float)i) * 0.25f;
+            const glm::vec3 pos(cl.x + std::cos(ang) * radius,
+                                cl.y + 0.4f + r01b * 1.2f + bob,
+                                cl.z + std::sin(ang) * radius);
+
+            glm::mat4 m = glm::translate(glm::mat4(1.0f), pos);
+            m = glm::rotate(m, age * 1.5f + (float)i,
+                            glm::vec3(0.4f, 1.0f, 0.3f));
+            m = glm::scale(m, glm::vec3((0.30f + r01a * 0.25f) * fade));
+            drawStevePart(vp * m, m, kBreath);
         }
     }
 

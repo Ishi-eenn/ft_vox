@@ -75,13 +75,19 @@ public:
     void stopAmbient(float fade_out = 2.0f);
 
     // ── SE: 2D one-shot ──────────────────────────────────────────────────────
-    void playSe(SoundEvent event);
+    // volume: この再生のみのゲイン [0,1]。
+    // max_duration_sec: > 0 なら再生をこの秒数で打ち切る (フェードアウト付き)。
+    //   足音素材のように 1 ファイルに複数歩入っている長尺サンプルを
+    //   「1 歩分」だけ鳴らすために使う。0 なら全長再生。
+    void playSe(SoundEvent event, float volume = 1.0f,
+                float max_duration_sec = 0.0f);
 
     // ── SE: 3D positional one-shot ───────────────────────────────────────────
     // Skipped automatically when the source is farther than max_distance.
     // Uses inverse-distance attenuation (OpenAL-style).
+    // max_duration_sec: playSe と同じ再生長制限。
     void playSe3D(SoundEvent event, float x, float y, float z,
-                  float max_distance = 32.0f);
+                  float max_distance = 32.0f, float max_duration_sec = 0.0f);
 
     // ── Internal access for SoundEmitter ────────────────────────────────────
     // Returns the raw ma_engine* as void*. Used only by SoundEmitter.

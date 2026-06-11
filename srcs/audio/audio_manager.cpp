@@ -196,9 +196,12 @@ void AudioManager::update(float dt) {
         }
     }
 
-    // Reclaim SE pool slots that have finished playing
+    // Reclaim SE pool slots that have finished playing.
+    // 停止予約 (ma_sound_set_stop_time_*) で止まった音は at_end にならないため
+    // is_playing もあわせて確認する (start 直後の音は必ず is_playing == true)。
     for (auto& se : d.se_pool)
-        if (se.initialized && ma_sound_at_end(&se.sound)) {
+        if (se.initialized &&
+            (ma_sound_at_end(&se.sound) || !ma_sound_is_playing(&se.sound))) {
             ma_sound_uninit(&se.sound);
             se.initialized = false;
         }
@@ -366,7 +369,21 @@ void AudioManager::stopAmbient(float fade_out) {
 
 // ── SE ────────────────────────────────────────────────────────────────────────
 
-void AudioManager::playSe(SoundEvent event) {
+// 再生長制限: max_duration_sec かけて 0 へフェードしつつ、終端で停止を予約する。
+// ハードカットだとクリックノイズが出るため、全区間フェードで自然に減衰させる。
+static void applyDurationLimit(ma_engine* engine, ma_sound* sound,
+                                float volume, float max_duration_sec) {
+    if (max_duration_sec <= 0.0f) return;
+    const ma_uint64 sr  = ma_engine_get_sample_rate(engine);
+    const ma_uint64 now = ma_engine_get_time_in_pcm_frames(engine);
+    const ma_uint64 dur = (ma_uint64)((double)max_duration_sec * (double)sr);
+    ma_sound_set_fade_in_milliseconds(
+        sound, volume, 0.0f, (ma_uint64)(max_duration_sec * 1000.0f));
+    ma_sound_set_stop_time_in_pcm_frames(sound, now + dur);
+}
+
+void AudioManager::playSe(SoundEvent event, float volume,
+                          float max_duration_sec) {
     Impl& d = *impl_;
     if (!d.engine_ok) return;
 
@@ -374,12 +391,35 @@ void AudioManager::playSe(SoundEvent event) {
     if (idx < 0 || idx >= static_cast<int>(SoundEvent::COUNT)) return;
 
     std::string full = resolveAudioPath(d.assets_root + "/" + kSeStems[idx]);
-    if (ma_engine_play_sound(&d.engine, full.c_str(), &d.se_group) != MA_SUCCESS)
+
+    // 音量・再生長の指定がなければ従来どおり fire-and-forget
+    if (volume >= 0.999f && max_duration_sec <= 0.0f) {
+        if (ma_engine_play_sound(&d.engine, full.c_str(), &d.se_group) != MA_SUCCESS)
+            fprintf(stderr, "[Audio] playSe failed: %s\n", full.c_str());
+        return;
+    }
+
+    // 音量/再生長を制御するため SE プールの ma_sound を使う (非3D)
+    SeSlot* slot = nullptr;
+    for (auto& s : d.se_pool) if (!s.initialized) { slot = &s; break; }
+    if (!slot) return;  // pool full; drop the sound
+
+    if (ma_sound_init_from_file(&d.engine, full.c_str(), 0,
+                                &d.se_group, nullptr,
+                                &slot->sound) != MA_SUCCESS) {
         fprintf(stderr, "[Audio] playSe failed: %s\n", full.c_str());
+        return;
+    }
+    slot->initialized = true;
+    ma_sound_set_spatialization_enabled(&slot->sound, MA_FALSE);
+    ma_sound_set_volume(&slot->sound, volume);
+    ma_sound_set_looping(&slot->sound, MA_FALSE);
+    applyDurationLimit(&d.engine, &slot->sound, volume, max_duration_sec);
+    ma_sound_start(&slot->sound);
 }
 
 void AudioManager::playSe3D(SoundEvent event, float x, float y, float z,
-                            float max_distance) {
+                            float max_distance, float max_duration_sec) {
     Impl& d = *impl_;
     if (!d.engine_ok) return;
 
@@ -410,6 +450,7 @@ void AudioManager::playSe3D(SoundEvent event, float x, float y, float z,
     ma_sound_set_min_distance(&slot->sound, 1.0f);
     ma_sound_set_max_distance(&slot->sound, max_distance);
     ma_sound_set_looping(&slot->sound, MA_FALSE);
+    applyDurationLimit(&d.engine, &slot->sound, 1.0f, max_duration_sec);
     ma_sound_start(&slot->sound);
 }
 

@@ -227,6 +227,11 @@ void VoxServer::handlePacket(int from_fd, PacketType type,
         broadcast(PacketType::DragonUpdate, payload, size, from_fd);
         break;
     }
+    case PacketType::DragonFireball: {
+        // ホストのドラゴンが発射したファイアボールを他全員に中継
+        broadcast(PacketType::DragonFireball, payload, size, from_fd);
+        break;
+    }
     case PacketType::PlayerDamage: {
         // ホストが計算したモブダメージを対象プレイヤーにのみ転送
         if (size < sizeof(PktPlayerDamage)) break;

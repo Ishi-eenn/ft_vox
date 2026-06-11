@@ -239,10 +239,14 @@ struct Engine::Impl {
     // Audio
     AudioManager     audio_mgr;
     BiomeAudioSystem biome_audio;
-    float footstep_timer = 0.0f;
-    float swim_timer     = 0.0f;
     float groan_timer    = 0.0f;
     float mob_step_timer = 0.0f;   // モブ足音の再生インターバル
+
+    // ローカル足音は時間でなく「実際に歩いた距離」で刻む。
+    // (壁に向かって歩いても鳴らない / 歩速に自然に追従する)
+    float step_dist_accum = 0.0f;  // 前回の足音からの累計水平移動距離
+    float step_prev_x = 0.0f, step_prev_z = 0.0f;
+    bool  step_prev_valid = false;
 
     // Mobs
     MobManager    mob_mgr;
@@ -500,21 +504,46 @@ void Engine::run() {
                 if (moving) impl_->local_walk_phase += dt * 8.0f;
 
                 // ── 歩行音・水泳音 ──────────────────────────────────────────
-                impl_->footstep_timer -= dt;
-                if (impl_->footstep_timer <= 0.0f && moving) {
-                    if (impl_->player.isInWater()) {
-                        impl_->audio_mgr.playSe(SoundEvent::Swim);
-                        impl_->footstep_timer = 0.55f;
-                    } else if (impl_->player.isOnGround()) {
+                // 実際に移動した水平距離を積算し、1歩分 (kStepLength) ごとに
+                // 1回だけ鳴らす。素材は複数歩入りの長尺があるため再生長も
+                // 1歩分に制限する (playSe の max_duration)。
+                {
+                    constexpr float kStepLength   = 0.85f;  // 1歩 = 0.85 ブロック
+                    constexpr float kStrokeLength = 1.40f;  // 水泳ストローク間隔
+                    constexpr float kStepVolume   = 0.35f;
+                    constexpr float kStepDuration = 0.35f;  // 再生長 (秒)
+
+                    glm::vec3 p = impl_->player.camera().position();
+                    if (!impl_->step_prev_valid) {
+                        impl_->step_prev_x = p.x;
+                        impl_->step_prev_z = p.z;
+                        impl_->step_prev_valid = true;
+                    }
+                    const float ddx = p.x - impl_->step_prev_x;
+                    const float ddz = p.z - impl_->step_prev_z;
+                    impl_->step_prev_x = p.x;
+                    impl_->step_prev_z = p.z;
+
+                    const bool in_water = impl_->player.isInWater();
+                    // 接地中 (or 水中) の移動だけを「歩き」として数える
+                    if (moving && (in_water || impl_->player.isOnGround()))
+                        impl_->step_dist_accum += std::sqrt(ddx*ddx + ddz*ddz);
+
+                    if (in_water) {
+                        if (impl_->step_dist_accum >= kStrokeLength) {
+                            impl_->step_dist_accum = 0.0f;
+                            impl_->audio_mgr.playSe(SoundEvent::Swim, 0.45f, 0.9f);
+                        }
+                    } else if (impl_->step_dist_accum >= kStepLength) {
+                        impl_->step_dist_accum = 0.0f;
                         // カメラY = 足元Y + 1.62 なので、-2.1 で足元の下
                         // （地面ブロック）を参照する
-                        glm::vec3 p = impl_->player.camera().position();
                         BlockType below = impl_->world.getWorldBlock(
                             (int)std::floor(p.x),
                             (int)std::floor(p.y - 2.1f),
                             (int)std::floor(p.z));
-                        impl_->audio_mgr.playSe(footstepForBlock(below));
-                        impl_->footstep_timer = 0.40f;
+                        impl_->audio_mgr.playSe(footstepForBlock(below),
+                                                 kStepVolume, kStepDuration);
                     }
                 }
             }
@@ -879,6 +908,14 @@ void Engine::run() {
                         st.health     = ev.dragon_health;
                         impl_->dragon_mgr.applyNetState(st);
                     }
+                } else if (ev.kind == NetworkEvent::Kind::DragonFireball) {
+                    // ホストのドラゴンが発射した。非ホストはローカルに弾を生成し
+                    // 以降は決定的シミュレーションで追従する。
+                    if (!is_mob_host) {
+                        impl_->dragon_mgr.spawnFireballNet(
+                            ev.fb_x, ev.fb_y, ev.fb_z,
+                            ev.fb_vx, ev.fb_vy, ev.fb_vz);
+                    }
                 }
             }
             // Update walking animation phase for each remote player.
@@ -910,14 +947,14 @@ void Engine::run() {
                         == BlockType::Water;
                     if (in_water) {
                         impl_->audio_mgr.playSe3D(SoundEvent::Swim,
-                            rp.x, rp.y, rp.z, 24.0f);
-                        rp.footstep_timer = 0.55f;
+                            rp.x, rp.y, rp.z, 24.0f, 0.9f);
+                        rp.footstep_timer = 0.70f;
                     } else {
                         BlockType below = impl_->world.getWorldBlock(
                             fx, (int)std::floor(rp.y - 2.1f), fz);
                         impl_->audio_mgr.playSe3D(footstepForBlock(below),
-                            rp.x, rp.y - 1.6f, rp.z, 24.0f);
-                        rp.footstep_timer = 0.40f;
+                            rp.x, rp.y - 1.6f, rp.z, 24.0f, 0.35f);
+                        rp.footstep_timer = 0.55f;
                     }
                 }
                 // 攻撃音（state_flags の attack ビット立ち上がりで1回）
@@ -1044,12 +1081,12 @@ void Engine::run() {
                         == BlockType::Water;
                     if (in_water) {
                         impl_->audio_mgr.playSe3D(SoundEvent::Swim,
-                            z.x, z.y + 0.5f, z.z, 24.0f);
+                            z.x, z.y + 0.5f, z.z, 24.0f, 0.9f);
                     } else {
                         BlockType below = impl_->world.getWorldBlock(
                             fx, (int)std::floor(z.y - 0.5f), fz);
                         impl_->audio_mgr.playSe3D(footstepForBlock(below),
-                            z.x, z.y, z.z, 24.0f);
+                            z.x, z.y, z.z, 24.0f, 0.35f);
                     }
                     if (++played >= 4) break;
                 }
@@ -1073,6 +1110,20 @@ void Engine::run() {
             if (dragon_dmg > 0.0f)
                 applyPlayerDamage(dragon_dmg, "dragon");
 
+            // AI が今フレーム発射したファイアボールをブロードキャスト
+            {
+                DragonFireball fb;
+                while (impl_->dragon_mgr.pollFireballSpawn(fb)) {
+                    if (impl_->multiplayer) {
+                        PktDragonFireball pkt;
+                        pkt.x  = fb.x;  pkt.y  = fb.y;  pkt.z  = fb.z;
+                        pkt.vx = fb.vx; pkt.vy = fb.vy; pkt.vz = fb.vz;
+                        impl_->net_client.sendRaw(PacketType::DragonFireball,
+                                                   &pkt, sizeof(pkt));
+                    }
+                }
+            }
+
             if (impl_->multiplayer) {
                 impl_->dragon_sync_timer -= dt;
                 if (impl_->dragon_sync_timer <= 0.0f) {
@@ -1095,6 +1146,21 @@ void Engine::run() {
         }
         // 非ホストはローカル AI を回さない (受信ステートで上書き)。
         // Phase C MVP では 10Hz の snap、補間は今後検討。
+
+        // ── ファイアボール / ブレス雲の更新 (ホスト・非ホスト共通) ──────────
+        // 飛翔は決定的なので各クライアントがローカルにシミュレートし、
+        // 雲のダメージは「自分のプレイヤー」の分だけ各自で適用する。
+        {
+            const float breath_dmg = impl_->dragon_mgr.updateProjectiles(
+                dt, isSolid, ppos.x, ppos.y, ppos.z);
+            if (breath_dmg > 0.0f)
+                applyPlayerDamage(breath_dmg, "dragon breath");
+
+            float bx, by, bz;
+            while (impl_->dragon_mgr.pollExplosion(bx, by, bz))
+                impl_->audio_mgr.playSe3D(SoundEvent::MobExplode,
+                                           bx, by, bz, 48.0f);
+        }
 
         // ── チャンクのストリーミング ─────────────────────────────────────────
         // プレイヤーの周囲のチャンクを読み込み、遠いチャンクを破棄する。
@@ -1229,6 +1295,11 @@ void Engine::run() {
             impl_->renderer.drawDragon(*impl_->dragon_mgr.dragon(),
                                         view4x4, proj4x4);
         }
+
+        // ファイアボール・ブレス雲（ドラゴン死亡後も雲は残るため独立に描画）
+        impl_->renderer.drawDragonEffects(impl_->dragon_mgr.fireballs(),
+                                           impl_->dragon_mgr.clouds(),
+                                           view4x4, proj4x4);
 
         // 3D 雲レイヤーを描画（不透明ブロックの後、水の前）
         impl_->renderer.drawClouds(view4x4, proj4x4, ppos.x, ppos.z, elapsed_s);

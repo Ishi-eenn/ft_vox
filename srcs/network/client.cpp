@@ -182,6 +182,21 @@ void NetworkClient::handlePacket(PacketType type, const uint8_t* payload,
         out.push_back(ev);
         break;
     }
+    case PacketType::DragonFireball: {
+        if (size < sizeof(PktDragonFireball)) break;
+        PktDragonFireball pkt;
+        std::memcpy(&pkt, payload, sizeof(pkt));
+        NetworkEvent ev;
+        ev.kind  = NetworkEvent::Kind::DragonFireball;
+        ev.fb_x  = pkt.x;
+        ev.fb_y  = pkt.y;
+        ev.fb_z  = pkt.z;
+        ev.fb_vx = pkt.vx;
+        ev.fb_vy = pkt.vy;
+        ev.fb_vz = pkt.vz;
+        out.push_back(ev);
+        break;
+    }
     case PacketType::PlayerDamage: {
         if (size < sizeof(PktPlayerDamage)) break;
         PktPlayerDamage pkt;

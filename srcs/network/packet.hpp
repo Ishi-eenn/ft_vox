@@ -15,6 +15,7 @@ enum class PacketType : uint8_t {
     DragonSpawn  = 8,  // 任意のC→S; S→C broadcast: ドラゴン召喚イベント
     DragonUpdate = 9,  // C(host)→S; S→C relay to others: ドラゴンの状態
     PlayerDamage = 10, // C(host)→S; S→該当クライアントへ転送: モブによるダメージ
+    DragonFireball = 11, // C(host)→S; S→C relay: ファイアボール発射イベント
 };
 
 #pragma pack(push, 1)
@@ -76,6 +77,14 @@ struct PktDragonState {
     float   yaw, pitch;
     float   wing_phase;
     float   health;
+};
+
+// DragonFireball: ホストのドラゴンが発射したファイアボール。
+// 飛翔は直線等速で決定的なので、発射イベントのみ配信し
+// 受信側がローカルにシミュレートする (着弾のブレス雲も同様)。
+struct PktDragonFireball {
+    float x, y, z;       // 発射位置 (口)
+    float vx, vy, vz;    // 速度 (ブロック/秒)
 };
 
 // PlayerDamage: ホストが計算したモブ→プレイヤーのダメージ。
